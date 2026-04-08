@@ -1,0 +1,94 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- HELPERS ----------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myUid() {
+      return request.auth.uid;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(myUid())).data;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && myProfile() != null
+        && myProfile().role == "admin"
+        && (myProfile().status == null || myProfile().status == "active");
+    }
+
+    function isActiveUser() {
+      return signedIn()
+        && (myProfile() == null || myProfile().status == null || myProfile().status == "active");
+    }
+
+    // ---------------- USERS ----------------
+    match /users/{uid} {
+
+      // admin can read all, user can read own
+      allow read: if isAdmin() || (signedIn() && uid == myUid());
+
+      // User can create own profile OR admin can create any user
+      allow create: if isAdmin() || (signedIn()
+        && uid == myUid()
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == "staff"
+        && (request.resource.data.status == null || request.resource.data.status == "active"));
+
+      // Admin can update any user (role/status changes). User can only update own name.
+      allow update: if isAdmin() || (signedIn()
+        && uid == myUid()
+        && resource.data != null
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status);
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------------- INVENTORY ITEMS ----------------
+    match /inventoryItems/{docId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------- DOCUMENTS ----------------
+    match /documents/{docId} {
+
+      // admin can read all, owner can read own
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.ownerUid == myUid());
+
+      // Any signed-in user can create a document request tagged with their own uid
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == myUid();
+
+      // admin can update any; owner can update own while pending
+      allow update: if isAdmin()
+        || (signedIn()
+            && resource.data.ownerUid == myUid()
+            && resource.data.status == "pending");
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------------- AUDIT LOGS ----------------
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if signedIn()
+        && request.resource.data.performedByUid == myUid();
+      allow update, delete: if false;
+    }
+
+    // ---------------- DEFAULT DENY ----------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
