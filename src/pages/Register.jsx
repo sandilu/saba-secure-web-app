@@ -1,8 +1,16 @@
 // src/pages/Register.jsx
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { PageShell, Field, Input, Select, PrimaryButton, Card, Pill } from "../ui/Layout";
+import { PageShell, Field, Input, PrimaryButton, Card, Pill } from "../ui/Layout";
 import { signup } from "../firebase/authActions";
+
+function validatePassword(password) {
+  if (password.length < 8) return "Password must be at least 8 characters.";
+  if (!/[A-Z]/.test(password)) return "Password must include at least one uppercase letter.";
+  if (!/[a-z]/.test(password)) return "Password must include at least one lowercase letter.";
+  if (!/[0-9]/.test(password)) return "Password must include at least one number.";
+  return "";
+}
 
 export default function Register() {
   const nav = useNavigate();
@@ -15,11 +23,30 @@ export default function Register() {
   const handleRegister = async (e) => {
     e.preventDefault();
     setMsg("");
+
+    if (!name.trim()) {
+      setMsg("Full name is required.");
+      return;
+    }
+
+    if (!email.trim() || !email.includes("@")) {
+      setMsg("Please enter a valid email address.");
+      return;
+    }
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setMsg(passwordError);
+      return;
+    }
+
     setLoading(true);
     try {
-      await signup(email, password, name, "staff");
-      setMsg("Account created ✅");
-      nav("/dashboard");
+      await signup(email, password, name);
+      setMsg("Account created successfully. Please verify your email before login.");
+      setTimeout(() => {
+        nav("/login");
+      }, 1500);
     } catch (err) {
       setMsg(err?.message || "Register failed");
     } finally {
@@ -31,14 +58,18 @@ export default function Register() {
     <PageShell
       right={
         <div className="space-y-3">
-          <Pill>Notes</Pill>
+          <Pill>Security</Pill>
           <Card
-            title="Account Types"
-            desc="All new accounts are created as Staff. Reach out to an Admin if you need elevated privileges."
+            title="Default user role"
+            desc="All self-registered users are created as Staff by default."
           />
           <Card
-            title="Profile stored"
-            desc="User profile will be safely stored in Firestore."
+            title="Email verification"
+            desc="Users must verify their email address before they can log in."
+          />
+          <Card
+            title="Strong passwords"
+            desc="Passwords must include uppercase, lowercase and numeric characters."
           />
         </div>
       }
@@ -48,6 +79,7 @@ export default function Register() {
         <h1 className="mt-3 text-2xl sm:text-3xl font-semibold text-white">
           Register a new user
         </h1>
+
         <p className="mt-2 text-sm text-white/70">
           Already have an account?{" "}
           <Link className="underline text-white" to="/login">
@@ -72,7 +104,7 @@ export default function Register() {
             />
           </Field>
 
-          <Field label="Password" hint="Use at least 6 characters.">
+          <Field label="Password" hint="Minimum 8 characters with uppercase, lowercase and number.">
             <Input
               placeholder="••••••••"
               type="password"

@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  addDoc,
   collection,
-  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
@@ -10,8 +8,23 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
+import { Link } from "react-router-dom";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  PieChart,
+  Pie,
+  Cell,
+  LineChart,
+  Line,
+} from "recharts";
 
-import { db } from "../firebase/firebaseConfig"; // ✅ change path if your db export is elsewhere
+import { db } from "../firebase/firebaseServices";
 import { useAuth } from "../auth/AuthContext";
 import {
   PageShell,
@@ -21,169 +34,629 @@ import {
   SecondaryButton,
   Pill,
   Card,
+  ConfirmModal,
 } from "../ui/Layout";
 import { logAction } from "../firebase/auditLogger";
+import {
+  listenInventoryItems,
+  createInventoryItem,
+  updateInventoryItem,
+  deleteInventoryItem,
+} from "../firebase/inventoryActions";
+import { getSales } from "../firebase/salesActions";
+import { listenNotifications } from "../firebase/notificationActions";
+import { listenSuppliers } from "../firebase/supplierActions";
+import BulkImportModal from "../components/BulkImportModal";
 
 const initialForm = {
-  name: "",
+  itemName: "",
   sku: "",
-  qty: 0,
-  minQty: 0,
+  category: "",
+  quantity: 0,
+  minStockLevel: 0,
+  buyingPrice: 0,
+  sellingPrice: 0,
+  supplier: "",
   location: "",
 };
+// Supplier linking is handled separately via selectedSupplier state
 
-const initialUserForm = {
-  name: "",
-  email: "",
-  role: "staff", // "staff" or "admin"
-};
+const PIE_COLORS = ["#fb7185", "#818cf8"];
 
 function sanitizeNumber(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
+function formatDate(value) {
+  if (!value) return "-";
+  if (typeof value?.toDate === "function") {
+    return value.toDate().toLocaleString();
+  }
+  return new Date(value).toLocaleString();
+}
+
+function formatCurrency(value) {
+  return `Rs. ${Number(value || 0).toLocaleString()}`;
+}
+
+function truncateLabel(value, max = 12) {
+  const text = String(value || "");
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function CustomBarTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+
+  const data = payload[0]?.payload || {};
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-950/95 px-4 py-3 text-sm text-white shadow-xl">
+      <div className="font-semibold">{data.fullName || label}</div>
+      <div className="mt-1 text-white/75">Units sold: {payload[0]?.value ?? 0}</div>
+      <div className="text-white/60">Revenue: {formatCurrency(data.revenue || 0)}</div>
+    </div>
+  );
+}
+
+function CustomLineTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-950/95 px-4 py-3 text-sm text-white shadow-xl">
+      <div className="font-semibold">Date: {label}</div>
+      <div className="mt-1 text-white/75">
+        Revenue: {formatCurrency(payload[0]?.value || 0)}
+      </div>
+    </div>
+  );
+}
+
+function CustomPieTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+
+  const item = payload[0];
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-950/95 px-4 py-3 text-sm text-white shadow-xl">
+      <div className="font-semibold">{item.name}</div>
+      <div className="mt-1 text-white/75">Count: {item.value}</div>
+    </div>
+  );
+}
+
+function SectionTitle({ eyebrow, title, pill }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <div className="text-sm text-white/70">{eyebrow}</div>
+        <div className="mt-1 text-lg font-semibold text-white">{title}</div>
+      </div>
+      {pill ? <Pill>{pill}</Pill> : null}
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
-  const { user, profile, logout } = useAuth();
+  const { user, profile } = useAuth();
+
+  const [activeTab, setActiveTab] = useState("inventory");
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const [mode, setMode] = useState("add"); // "add" | "edit"
+  const [mode, setMode] = useState("add");
   const [editingId, setEditingId] = useState(null);
-
   const [form, setForm] = useState(initialForm);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-
   const [search, setSearch] = useState("");
 
-  // ---- USER MANAGEMENT STATE ----
-  const [activeTab, setActiveTab] = useState("inventory"); // "inventory" | "users"
-  
+  const [sales, setSales] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(true);
+
   const [usersList, setUsersList] = useState([]);
   const [usersLoading, setUsersLoading] = useState(true);
-  
-  const [userMode, setUserMode] = useState("add"); // "add" | "edit"
-  const [editingUserId, setEditingUserId] = useState(null);
-  const [userForm, setUserForm] = useState(initialUserForm);
   const [userMsg, setUserMsg] = useState("");
-  const [userBusy, setUserBusy] = useState(false);
   const [userSearch, setUserSearch] = useState("");
 
-  // ---- DOCUMENT APPROVAL STATE ----
   const [docsList, setDocsList] = useState([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [docMsg, setDocMsg] = useState("");
   const [docBusy, setDocBusy] = useState(false);
   const [docSearch, setDocSearch] = useState("");
 
-  // ---- LIVE LOAD ----
+  // ─── Confirm modal state ─────────────────────────────────────────────────────
+  // Shape: { title, body, variant, requireReason, onConfirm } | null
+  const [confirmModal, setConfirmModal] = useState(null);
+  function openConfirm(opts) { setConfirmModal(opts); }
+  function closeConfirm() { setConfirmModal(null); }
+
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [lowStockPreviewAlerts, setLowStockPreviewAlerts] = useState([]);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+
+  // Supplier linking state for inventory form
+  const [suppliers, setSuppliers] = useState([]);
+  const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [supplierSearch, setSupplierSearch] = useState("");
+
   useEffect(() => {
-    const q = query(collection(db, "inventoryItems"), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!user) return;
+    const unsub = listenNotifications(
+      user.uid,
+      profile?.role,
+      (data) => {
+        setNotifications(data.slice(0, 3)); // Only preview the latest 3
+        setNotificationsLoading(false);
+      },
+      (err) => {
+        console.error(err);
+        setNotificationsLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [user, profile?.role]);
+
+  // Live low-stock alerts for dashboard preview (mirrors NotificationsPage logic)
+  useEffect(() => {
+    if (!items.length) return;
+    const alerts = items
+      .filter((it) => String(it.itemName || "").trim() && Number(it.quantity ?? 0) <= Number(it.minStockLevel ?? 0))
+      .slice(0, 3)
+      .map((it) => ({
+        id: `low-stock-${it.id}`,
+        title: "Low Stock Alert",
+        message: `${it.itemName} (SKU: ${it.sku || "–"}) has ${it.quantity ?? 0} units remaining — at or below min level of ${it.minStockLevel ?? 0}.`,
+        isRead: false,
+        createdAt: new Date(),
+      }));
+    setLowStockPreviewAlerts(alerts);
+  }, [items]);
+
+  // Load suppliers for inventory form
+  useEffect(() => {
+    return listenSuppliers(
+      (data) => setSuppliers(data),
+      (err)  => console.error("Failed to load suppliers:", err)
+    );
+  }, []);
+
+  useEffect(() => {
+    const unsub = listenInventoryItems(
+      (data) => {
         setItems(data);
         setLoading(false);
       },
       (err) => {
         console.error(err);
-        setMsg("Failed to load inventoryItems. Check Firestore rules / console.");
+        setMsg("Failed to load inventory items.");
         setLoading(false);
       }
     );
+
     return () => unsub();
   }, []);
 
-  // ---- LIVE LOAD USERS ----
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadSales() {
+      try {
+        const data = await getSales();
+        if (mounted) setSales(data);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (mounted) setSalesLoading(false);
+      }
+    }
+
+    loadSales();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   useEffect(() => {
     const q = query(collection(db, "users"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setUsersList(data);
+        setUsersList(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setUsersLoading(false);
       },
       (err) => {
         console.error(err);
-        setUserMsg("Failed to load users. Check Firestore rules.");
+        setUserMsg("Failed to load users.");
         setUsersLoading(false);
       }
     );
+
     return () => unsub();
   }, []);
 
-  // ---- LIVE LOAD DOCUMENTS ----
   useEffect(() => {
     const q = query(collection(db, "documents"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setDocsList(data);
+        setDocsList(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setDocsLoading(false);
       },
       (err) => {
         console.error(err);
-        setDocMsg("Failed to load documents. Check Firestore rules.");
+        setDocMsg("Failed to load documents.");
         setDocsLoading(false);
       }
     );
+
     return () => unsub();
   }, []);
 
-  const filtered = useMemo(() => {
+  const filteredItems = useMemo(() => {
     const s = search.trim().toLowerCase();
     if (!s) return items;
+
     return items.filter((it) => {
-      const name = String(it.name || "").toLowerCase();
+      const itemName = String(it.itemName || "").toLowerCase();
       const sku = String(it.sku || "").toLowerCase();
-      const loc = String(it.location || "").toLowerCase();
-      return name.includes(s) || sku.includes(s) || loc.includes(s);
+      const category = String(it.category || "").toLowerCase();
+      const supplier = String(it.supplier || "").toLowerCase();
+      const location = String(it.location || "").toLowerCase();
+
+      return (
+        itemName.includes(s) ||
+        sku.includes(s) ||
+        category.includes(s) ||
+        supplier.includes(s) ||
+        location.includes(s)
+      );
     });
   }, [items, search]);
 
   const lowStockCount = useMemo(() => {
-    return items.filter((it) => Number(it.qty || 0) < Number(it.minQty || 0)).length;
+    return items.filter(
+      (it) => Number(it.quantity || 0) <= Number(it.minStockLevel || 0)
+    ).length;
   }, [items]);
 
-  // ---- FORM HELPERS ----
+  const filteredUsers = useMemo(() => {
+    const s = userSearch.trim().toLowerCase();
+    if (!s) return usersList;
+
+    return usersList.filter((u) => {
+      const name = String(u.name || "").toLowerCase();
+      const email = String(u.email || "").toLowerCase();
+      const role = String(u.role || "").toLowerCase();
+      const status = String(u.status || "").toLowerCase();
+
+      return (
+        name.includes(s) ||
+        email.includes(s) ||
+        role.includes(s) ||
+        status.includes(s)
+      );
+    });
+  }, [usersList, userSearch]);
+
+  const filteredDocs = useMemo(() => {
+    const s = docSearch.trim().toLowerCase();
+    if (!s) return docsList;
+
+    return docsList.filter((d) => {
+      const title = String(d.title || "").toLowerCase();
+      const ownerName = String(d.ownerName || "").toLowerCase();
+      const status = String(d.status || "").toLowerCase();
+      return title.includes(s) || ownerName.includes(s) || status.includes(s);
+    });
+  }, [docsList, docSearch]);
+
+  const totalRevenueEstimate = useMemo(() => {
+    return items.reduce(
+      (sum, item) => sum + Number(item.quantity || 0) * Number(item.sellingPrice || 0),
+      0
+    );
+  }, [items]);
+
+  const salesAnalytics = useMemo(() => {
+    const totalSalesCount = sales.length;
+    const totalRevenue = sales.reduce(
+      (sum, sale) => sum + Number(sale.totalPrice || 0),
+      0
+    );
+    const totalUnitsSold = sales.reduce(
+      (sum, sale) => sum + Number(sale.quantitySold || 0),
+      0
+    );
+
+    let totalProfit = 0;
+
+    const salesByItem = sales.reduce((acc, sale) => {
+      const key = sale.itemId || sale.sku || sale.itemName || "unknown";
+
+      // Calculate profit by joining with current inventory items
+      const matchedItem = items.find(i => i.id === sale.itemId);
+      // Fallback: assume 0 buying price if item is totally missing
+      const buyingPrice = matchedItem ? Number(matchedItem.buyingPrice || 0) : 0;
+      const unitProfit = Number(sale.unitPrice || 0) - buyingPrice;
+      const saleProfit = unitProfit * Number(sale.quantitySold || 0);
+
+      totalProfit += saleProfit;
+
+      if (!acc[key]) {
+        acc[key] = {
+          itemId: sale.itemId || "",
+          itemName: sale.itemName || "Unknown Item",
+          sku: sale.sku || "-",
+          totalUnits: 0,
+          totalRevenue: 0,
+          totalProfit: 0,
+          transactions: 0,
+        };
+      }
+
+      acc[key].totalUnits += Number(sale.quantitySold || 0);
+      acc[key].totalRevenue += Number(sale.totalPrice || 0);
+      acc[key].totalProfit += saleProfit;
+      acc[key].transactions += 1;
+
+      return acc;
+    }, {});
+
+    const topSellingItems = Object.values(salesByItem)
+      .sort((a, b) => b.totalUnits - a.totalUnits)
+      .slice(0, 5);
+      
+    const topProfitableItems = Object.values(salesByItem)
+      .sort((a, b) => b.totalProfit - a.totalProfit)
+      .slice(0, 5);
+
+    const recentSales = [...sales].slice(0, 5);
+
+    return {
+      totalSalesCount,
+      totalRevenue,
+      totalProfit,
+      totalUnitsSold,
+      salesByItem,
+      topSellingItems,
+      topProfitableItems,
+      recentSales,
+    };
+  }, [sales, items]);
+
+  const chartData = useMemo(() => {
+    const salesByItemChart = salesAnalytics.topSellingItems.map((item) => ({
+      name: truncateLabel(item.itemName, 14),
+      units: item.totalUnits,
+      revenue: item.totalRevenue,
+      fullName: item.itemName,
+    }));
+
+    const revenueByDateMap = sales.reduce((acc, sale) => {
+      const rawDate =
+        typeof sale.soldAt?.toDate === "function"
+          ? sale.soldAt.toDate()
+          : sale.soldAt
+          ? new Date(sale.soldAt)
+          : null;
+
+      if (!rawDate || Number.isNaN(rawDate.getTime())) return acc;
+
+      const key = rawDate.toISOString().slice(0, 10);
+      if (!acc[key]) {
+        acc[key] = {
+          date: key,
+          revenue: 0,
+        };
+      }
+      acc[key].revenue += Number(sale.totalPrice || 0);
+      return acc;
+    }, {});
+
+    const revenueTrend = Object.values(revenueByDateMap)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-7)
+      .map((entry) => ({
+        label: entry.date.slice(5),
+        revenue: entry.revenue,
+      }));
+
+    return {
+      salesByItemChart,
+      revenueTrend,
+    };
+  }, [sales, salesAnalytics.topSellingItems]);
+
+  const lowStockPieData = useMemo(() => {
+    return [
+      { name: "Low Stock", value: lowStockCount },
+      { name: "Healthy Stock", value: Math.max(items.length - lowStockCount, 0) },
+    ];
+  }, [items.length, lowStockCount]);
+
+  const aiInsights = useMemo(() => {
+    const insights = [];
+    const recommendations = [];
+
+    const salesBySku = {};
+    Object.values(salesAnalytics.salesByItem || {}).forEach((entry) => {
+      if (entry.sku) {
+        salesBySku[entry.sku] = entry;
+      }
+    });
+
+    const lowStockItems = items.filter(
+      (item) => Number(item.quantity || 0) <= Number(item.minStockLevel || 0)
+    );
+
+    const noSalesItems = items.filter((item) => !salesBySku[item.sku]);
+    const topSeller = salesAnalytics.topSellingItems[0];
+
+    if (topSeller) {
+      insights.push({
+        type: "success",
+        title: "Top performer detected",
+        text: `${topSeller.itemName} is currently the best-selling item with ${topSeller.totalUnits} units sold and ${formatCurrency(
+          topSeller.totalRevenue
+        )} revenue.`,
+      });
+    }
+
+    if (lowStockItems.length > 0) {
+      const criticalLow = [...lowStockItems]
+        .sort((a, b) => Number(a.quantity || 0) - Number(b.quantity || 0))
+        .slice(0, 3);
+
+      insights.push({
+        type: "warning",
+        title: "Low stock risk detected",
+        text: `${lowStockItems.length} item(s) are at or below minimum stock level. Most urgent: ${criticalLow
+          .map((item) => `${item.itemName} (${item.quantity} left)`)
+          .join(", ")}.`,
+      });
+    }
+
+    if (noSalesItems.length > 0) {
+      const sampleNoSales = noSalesItems.slice(0, 3);
+
+      insights.push({
+        type: "info",
+        title: "Slow-moving stock detected",
+        text: `${noSalesItems.length} inventory item(s) have no recorded sales yet. Example: ${sampleNoSales
+          .map((item) => item.itemName)
+          .join(", ")}.`,
+      });
+    }
+
+    if (salesAnalytics.totalRevenue > 0 && salesAnalytics.topSellingItems.length > 0) {
+      const topRevenueItem = [...salesAnalytics.topSellingItems].sort(
+        (a, b) => b.totalRevenue - a.totalRevenue
+      )[0];
+
+      const contribution = Math.round(
+        (Number(topRevenueItem.totalRevenue || 0) / Number(salesAnalytics.totalRevenue || 1)) *
+          100
+      );
+
+      insights.push({
+        type: "info",
+        title: "Revenue concentration insight",
+        text: `${topRevenueItem.itemName} contributes about ${contribution}% of total recorded revenue.`,
+      });
+    }
+
+    if (lowStockItems.length > 0) {
+      lowStockItems.slice(0, 5).forEach((item) => {
+        const soldEntry = salesBySku[item.sku];
+        const soldUnits = Number(soldEntry?.totalUnits || 0);
+        const targetLevel = Math.max(
+          Number(item.minStockLevel || 0) * 2,
+          soldUnits > 0 ? soldUnits : Number(item.minStockLevel || 0) + 5
+        );
+        const reorderQty = Math.max(0, targetLevel - Number(item.quantity || 0));
+
+        recommendations.push({
+          priority: "High",
+          title: `Reorder ${item.itemName}`,
+          text: `Current stock is ${item.quantity}. Recommended reorder quantity: ${reorderQty} units to reduce stock-out risk.`,
+        });
+      });
+    }
+
+    if (topSeller) {
+      recommendations.push({
+        priority: "Medium",
+        title: `Promote ${topSeller.itemName}`,
+        text: `This item is already performing well. Consider keeping strong stock coverage and using it in featured promotions.`,
+      });
+    }
+
+    if (noSalesItems.length > 0) {
+      noSalesItems.slice(0, 3).forEach((item) => {
+        recommendations.push({
+          priority: "Medium",
+          title: `Review ${item.itemName}`,
+          text: `This item has inventory but no recorded sales. Review pricing, product visibility, or supplier reorder frequency.`,
+        });
+      });
+    }
+
+    const highMarginItems = items
+      .map((item) => ({
+        ...item,
+        margin: Number(item.sellingPrice || 0) - Number(item.buyingPrice || 0),
+      }))
+      .filter((item) => item.margin > 0)
+      .sort((a, b) => b.margin - a.margin)
+      .slice(0, 2);
+
+    highMarginItems.forEach((item) => {
+      recommendations.push({
+        priority: "Low",
+        title: `Push high-margin item: ${item.itemName}`,
+        text: `Estimated margin per unit is ${formatCurrency(
+          item.margin
+        )}. Consider bundling or highlighting this item in promotions.`,
+      });
+    });
+
+    return {
+      insights: insights.slice(0, 6),
+      recommendations: recommendations.slice(0, 8),
+    };
+  }, [items, salesAnalytics]);
+
   function resetForm() {
     setForm(initialForm);
     setMode("add");
     setEditingId(null);
+    setSelectedSupplier(null);
+    setSupplierSearch("");
   }
 
   function startEdit(item) {
     setMode("edit");
     setEditingId(item.id);
     setForm({
-      name: item.name ?? "",
+      itemName: item.itemName ?? "",
       sku: item.sku ?? "",
-      qty: sanitizeNumber(item.qty),
-      minQty: sanitizeNumber(item.minQty),
+      category: item.category ?? "",
+      quantity: sanitizeNumber(item.quantity),
+      minStockLevel: sanitizeNumber(item.minStockLevel),
+      buyingPrice: sanitizeNumber(item.buyingPrice),
+      sellingPrice: sanitizeNumber(item.sellingPrice),
+      supplier: item.supplier ?? "",
       location: item.location ?? "",
     });
+    // Restore linked supplier if any
+    if (item.supplierId) {
+      const linked = suppliers.find((s) => s.id === item.supplierId);
+      setSelectedSupplier(linked || { id: item.supplierId, name: item.supplierName || item.supplier || "" });
+    } else {
+      setSelectedSupplier(null);
+    }
+    setSupplierSearch("");
     setMsg("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function validate() {
-    if (!form.name.trim()) return "Name is required.";
+  function validateForm() {
+    if (!form.itemName.trim()) return "Item name is required.";
     if (!form.sku.trim()) return "SKU is required.";
-    if (sanitizeNumber(form.qty) < 0) return "Qty cannot be negative.";
-    if (sanitizeNumber(form.minQty) < 0) return "Min Qty cannot be negative.";
+    if (!form.category.trim()) return "Category is required.";
+    if (sanitizeNumber(form.quantity) < 0) return "Quantity cannot be negative.";
+    if (sanitizeNumber(form.minStockLevel) < 0) return "Minimum stock cannot be negative.";
+    if (sanitizeNumber(form.buyingPrice) < 0) return "Buying price cannot be negative.";
+    if (sanitizeNumber(form.sellingPrice) < 0) return "Selling price cannot be negative.";
 
-    // client-side SKU uniqueness (nice-to-have; rules will be stronger later)
     const skuLower = form.sku.trim().toLowerCase();
     const clash = items.find(
       (it) =>
         String(it.sku || "").trim().toLowerCase() === skuLower &&
         it.id !== editingId
     );
+
     if (clash) return "SKU already exists. Use a unique SKU.";
     return "";
   }
@@ -192,174 +665,272 @@ export default function AdminDashboard() {
     e.preventDefault();
     setMsg("");
 
-    const error = validate();
+    const error = validateForm();
     if (error) {
       setMsg(error);
       return;
     }
 
     setBusy(true);
+
     try {
       const payload = {
-        name: form.name.trim(),
-        sku: form.sku.trim(),
-        qty: sanitizeNumber(form.qty),
-        minQty: sanitizeNumber(form.minQty),
-        location: form.location.trim(),
-        updatedAt: serverTimestamp(),
+        itemName: form.itemName,
+        sku: form.sku,
+        category: form.category,
+        quantity: sanitizeNumber(form.quantity),
+        minStockLevel: sanitizeNumber(form.minStockLevel),
+        buyingPrice: sanitizeNumber(form.buyingPrice),
+        sellingPrice: sanitizeNumber(form.sellingPrice),
+        supplier: selectedSupplier?.name || form.supplier,
+        location: form.location,
+        // Supplier linking
+        supplierId:   selectedSupplier?.id   || null,
+        supplierName: selectedSupplier?.name || form.supplier || "",
       };
 
       if (mode === "add") {
-        await addDoc(collection(db, "inventoryItems"), {
-          ...payload,
-          createdAt: serverTimestamp(),
-        });
-        logAction("INVENTORY_CREATE", user.uid, user.email, { sku: payload.sku, name: payload.name });
-        setMsg("✅ Item added.");
-        resetForm();
+        await createInventoryItem(payload, user);
+        setMsg("✅ Inventory item added successfully.");
+        // Audit supplier link
+        if (selectedSupplier) {
+          const { logAction } = await import("../firebase/auditLogger");
+          await logAction("INVENTORY_SUPPLIER_LINKED", user.uid, user.email,
+            { itemName: form.itemName, supplierId: selectedSupplier.id, supplierName: selectedSupplier.name },
+            "inventory", selectedSupplier.id).catch(() => {});
+        }
       } else {
-        await updateDoc(doc(db, "inventoryItems", editingId), payload);
-        logAction("INVENTORY_UPDATE", user.uid, user.email, { sku: payload.sku, name: payload.name, id: editingId });
-        setMsg("✅ Item updated.");
-        resetForm();
+        await updateInventoryItem(editingId, payload, user);
+        setMsg("✅ Inventory item updated successfully.");
+        if (selectedSupplier) {
+          const { logAction } = await import("../firebase/auditLogger");
+          await logAction("INVENTORY_SUPPLIER_LINKED", user.uid, user.email,
+            { itemName: form.itemName, supplierId: selectedSupplier.id, supplierName: selectedSupplier.name },
+            "inventory", editingId).catch(() => {});
+        }
       }
+
+      resetForm();
     } catch (err) {
       console.error(err);
-      setMsg("❌ Save failed. Check Firestore rules (write permissions).");
+      setMsg(err?.message || "❌ Failed to save inventory item.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function onDelete(item) {
-    const ok = window.confirm(`Delete item "${item.name}" (SKU: ${item.sku}) ?`);
-    if (!ok) return;
-
-    setBusy(true);
-    setMsg("");
-    try {
-      await deleteDoc(doc(db, "inventoryItems", item.id));
-      logAction("INVENTORY_DELETE", user.uid, user.email, { sku: item.sku, name: item.name, id: item.id });
-      setMsg("🗑️ Item deleted.");
-      if (editingId === item.id) resetForm();
-    } catch (err) {
-      console.error(err);
-      setMsg("❌ Delete failed. Check Firestore rules (write permissions).");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // ---- USER FORM HELPERS ----
-  function resetUserForm() {
-    setUserForm(initialUserForm);
-    setUserMode("add");
-    setEditingUserId(null);
-  }
-
-  function startUserEdit(u) {
-    setUserMode("edit");
-    setEditingUserId(u.id);
-    setUserForm({
-      name: u.name ?? "",
-      email: u.email ?? "",
-      role: u.role ?? "staff",
+  function onDelete(item) {
+    openConfirm({
+      title: "Delete Inventory Item",
+      body: `You are about to permanently delete "${item.itemName}" (SKU: ${item.sku}). This action cannot be undone.`,
+      variant: "danger",
+      requireReason: false,
+      onConfirm: async () => {
+        setBusy(true);
+        setMsg("");
+        try {
+          await deleteInventoryItem(item.id, user, {
+            itemName: item.itemName,
+            sku: item.sku,
+          });
+          setMsg("🗑️ Inventory item deleted.");
+          if (editingId === item.id) resetForm();
+        } catch (err) {
+          console.error(err);
+          setMsg("❌ Failed to delete inventory item.");
+        } finally {
+          setBusy(false);
+        }
+      },
     });
-    setUserMsg("");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function validateUser() {
-    if (!userForm.name.trim()) return "Name is required.";
-    if (!userForm.email.trim() || !userForm.email.includes("@")) return "Valid email is required.";
-    if (!userForm.role) return "Role is required.";
+  function handleUserRoleChange(targetUser, newRole) {
+    const oldRole = targetUser.role || "staff";
+    openConfirm({
+      title: "Change User Role",
+      body: `Change role for ${targetUser.email} from "${oldRole}" to "${newRole}"? This will immediately affect their access permissions.`,
+      variant: "warning",
+      requireReason: false,
+      onConfirm: async () => {
+        setUserMsg("");
+        try {
+          await updateDoc(doc(db, "users", targetUser.id), {
+            role: newRole,
+            updatedAt: serverTimestamp(),
+          });
+          await logAction(
+            "USER_ROLE_UPDATE",
+            user.uid,
+            user.email,
+            {
+              targetUserId: targetUser.id,
+              targetEmail: targetUser.email,
+              oldRole,
+              newRole,
+            },
+            "user",
+            targetUser.id
+          );
 
-    const emailLower = userForm.email.trim().toLowerCase();
-    const clash = usersList.find(
-      (u) =>
-        String(u.email || "").trim().toLowerCase() === emailLower &&
-        u.id !== editingUserId
-    );
-    if (clash) return "Email already exists.";
-    return "";
+          try {
+            const { createNotification } = await import("../firebase/notificationActions");
+            await createNotification({
+              targetUid: targetUser.id,
+              title: "Account Role Updated",
+              message: `Your account role has been changed from ${oldRole} to ${newRole}.`,
+              type: "warning",
+              targetType: "user",
+              targetId: targetUser.id
+            });
+          } catch (notifErr) {
+            console.error("Failed to send role update notification:", notifErr);
+          }
+
+          setUserMsg(`✅ Role updated for ${targetUser.email}`);
+        } catch (err) {
+          console.error(err);
+          setUserMsg("❌ Failed to update user role.");
+        }
+      },
+    });
   }
 
-  async function onUserSubmit(e) {
-    e.preventDefault();
-    setUserMsg("");
+  function handleUserStatusChange(targetUser, newStatus) {
+    const oldStatus = targetUser.status || "active";
+    const isDisabling = newStatus === "disabled";
+    openConfirm({
+      title: isDisabling ? "Disable User Account" : "Activate User Account",
+      body: isDisabling
+        ? `You are about to disable ${targetUser.email}. They will no longer be able to log in until reactivated.`
+        : `You are about to reactivate ${targetUser.email}. They will regain full access based on their role.`,
+      variant: isDisabling ? "danger" : "warning",
+      requireReason: false,
+      onConfirm: async () => {
+        setUserMsg("");
+        try {
+          await updateDoc(doc(db, "users", targetUser.id), {
+            status: newStatus,
+            updatedAt: serverTimestamp(),
+          });
+          await logAction(
+            "USER_STATUS_UPDATE",
+            user.uid,
+            user.email,
+            {
+              targetUserId: targetUser.id,
+              targetEmail: targetUser.email,
+              oldStatus,
+              newStatus,
+            },
+            "user",
+            targetUser.id
+          );
 
-    const error = validateUser();
-    if (error) {
-      setUserMsg(error);
-      return;
-    }
+          try {
+            const { createNotification } = await import("../firebase/notificationActions");
+            await createNotification({
+              targetUid: targetUser.id,
+              title: "Account Status Updated",
+              message: `Your account has been ${newStatus}.`,
+              type: newStatus === "disabled" ? "danger" : "info",
+              targetType: "user",
+              targetId: targetUser.id
+            });
+          } catch (notifErr) {
+            console.error("Failed to send status update notification:", notifErr);
+          }
 
-    setUserBusy(true);
-    try {
-      const payload = {
-        name: userForm.name.trim(),
-        email: userForm.email.trim().toLowerCase(),
-        role: userForm.role,
-        updatedAt: serverTimestamp(),
-      };
-
-      if (userMode === "add") {
-        await addDoc(collection(db, "users"), {
-          ...payload,
-          createdAt: serverTimestamp(),
-        });
-        logAction("USER_CREATE", user.uid, user.email, { targetEmail: payload.email, role: payload.role });
-        setUserMsg("✅ User added.");
-        resetUserForm();
-      } else {
-        await updateDoc(doc(db, "users", editingUserId), payload);
-        logAction("USER_UPDATE", user.uid, user.email, { targetEmail: payload.email, role: payload.role, id: editingUserId });
-        setUserMsg("✅ User updated.");
-        resetUserForm();
-      }
-    } catch (err) {
-      console.error(err);
-      setUserMsg("❌ Save failed. Check Firestore rules.");
-    } finally {
-      setUserBusy(false);
-    }
+          setUserMsg(`✅ Status updated for ${targetUser.email}`);
+        } catch (err) {
+          console.error(err);
+          setUserMsg("❌ Failed to update user status.");
+        }
+      },
+    });
   }
 
-  async function onUserDelete(u) {
-    // Prevent deleting yourself
-    if (user?.email === u.email) {
-       window.alert("You cannot delete your own account.");
-       return;
-    }
-
-    const ok = window.confirm(`Delete user "${u.name}" (${u.email})?`);
-    if (!ok) return;
-
-    setUserBusy(true);
-    setUserMsg("");
-    try {
-      await deleteDoc(doc(db, "users", u.id));
-      logAction("USER_DELETE", user.uid, user.email, { targetEmail: u.email, id: u.id });
-      setUserMsg("🗑️ User deleted.");
-      if (editingUserId === u.id) resetUserForm();
-    } catch (err) {
-      console.error(err);
-      setUserMsg("❌ Delete failed. Check Firestore rules.");
-    } finally {
-      setUserBusy(false);
-    }
+  function requestDocumentStatusChange(documentItem, newStatus) {
+    const isRejection = newStatus === "rejected";
+    openConfirm({
+      title: isRejection ? "Reject Document" : "Approve Document",
+      body: isRejection
+        ? `You are about to reject "${documentItem.title || "this document"}". Please provide a reason below.`
+        : `You are about to approve "${documentItem.title || "this document"}". The requester will be notified.`,
+      variant: isRejection ? "danger" : "warning",
+      requireReason: isRejection,
+      onConfirm: async (reason) => {
+        await _applyDocumentStatus(documentItem, newStatus, reason);
+      },
+    });
   }
 
-  // ---- DOCUMENT APPROVAL HELPERS ----
-  async function updateDocStatus(docId, newStatus) {
+  async function _applyDocumentStatus(documentItem, newStatus, reason = "") {
     setDocBusy(true);
     setDocMsg("");
+
     try {
-      await updateDoc(doc(db, "documents", docId), {
+      // Build approval history fields (Step 3 — Document Approval History)
+      const historyFields =
+        newStatus === "approved"
+          ? {
+              approvedBy: user.uid,
+              approvedByEmail: user.email,
+              approvedAt: serverTimestamp(),
+              // Clear any previous rejection data
+              rejectedBy: null,
+              rejectedByEmail: null,
+              rejectedAt: null,
+              rejectionReason: null,
+            }
+          : {
+              rejectedBy: user.uid,
+              rejectedByEmail: user.email,
+              rejectedAt: serverTimestamp(),
+              rejectionReason: reason || "",
+              // Clear any previous approval data
+              approvedBy: null,
+              approvedByEmail: null,
+              approvedAt: null,
+            };
+
+      await updateDoc(doc(db, "documents", documentItem.id), {
         status: newStatus,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        ...historyFields,
       });
-      logAction("DOCUMENT_STATUS_CHANGE", user.uid, user.email, { documentId: docId, newStatus });
+
+      await logAction(
+        "DOCUMENT_STATUS_CHANGE",
+        user.uid,
+        user.email,
+        {
+          documentId: documentItem.id,
+          title: documentItem.title,
+          oldStatus: documentItem.status || "pending",
+          newStatus,
+          ...(newStatus === "rejected" && reason ? { rejectionReason: reason } : {}),
+        },
+        "document",
+        documentItem.id
+      );
+
+      // Trigger notification for the document owner
+      try {
+        const { createNotification } = await import("../firebase/notificationActions");
+        await createNotification({
+          targetUid: documentItem.ownerUid, // Alert the specific user who owns it
+          title: newStatus === "approved" ? "Document Approved" : "Document Rejected",
+          message: newStatus === "approved"
+            ? `Your document "${documentItem.title || "Untitled"}" has been approved.`
+            : `Your document "${documentItem.title || "Untitled"}" has been rejected. Reason: ${reason || "No reason provided."}`,
+          type: "approval",
+          link: "/dashboard" // Or wherever they view their documents
+        });
+      } catch (notifErr) {
+        console.error("Failed to send document status notification:", notifErr);
+      }
+
       setDocMsg(`✅ Document marked as ${newStatus}.`);
     } catch (err) {
       console.error(err);
@@ -369,57 +940,457 @@ export default function AdminDashboard() {
     }
   }
 
-  const filteredUsers = useMemo(() => {
-    const s = userSearch.trim().toLowerCase();
-    if (!s) return usersList;
-    return usersList.filter((u) => {
-      const name = String(u.name || "").toLowerCase();
-      const email = String(u.email || "").toLowerCase();
-      return name.includes(s) || email.includes(s);
-    });
-  }, [usersList, userSearch]);
-
-  const filteredDocs = useMemo(() => {
-    const s = docSearch.trim().toLowerCase();
-    if (!s) return docsList;
-    return docsList.filter((d) => {
-      const title = String(d.title || "").toLowerCase();
-      const uploader = String(d.ownerName || "").toLowerCase();
-      return title.includes(s) || uploader.includes(s);
-    });
-  }, [docsList, docSearch]);
-
   return (
+    <>
+    <ConfirmModal state={confirmModal} onClose={closeConfirm} />
+    {showBulkImport && (
+      <BulkImportModal
+        existingItems={items}
+        user={user}
+        onClose={() => setShowBulkImport(false)}
+        onSuccess={() => setShowBulkImport(false)}
+      />
+    )}
     <PageShell>
       <div className="grid gap-6">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-2">
+            <div className="inline-flex items-center gap-2 flex-wrap">
               <Pill>Admin Dashboard</Pill>
               <Pill>Low stock {lowStockCount}</Pill>
+              <Pill>Total sales {salesAnalytics.totalSalesCount}</Pill>
             </div>
+
             <h1 className="mt-3 text-2xl sm:text-3xl font-semibold tracking-tight text-white">
-              Dashboard Management
+              Business Management Console
             </h1>
+
             <p className="mt-1 text-sm text-white/70">
               Signed in as <b>{profile?.name || user?.email}</b> • role:{" "}
               <b>{profile?.role || "admin"}</b>
             </p>
           </div>
 
-          <div className="flex gap-3">
-            <button
-              onClick={logout}
-              className="rounded-2xl bg-white/5 ring-1 ring-white/15 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10"
-            >
-              Logout
-            </button>
+          <div className="flex flex-wrap gap-3">
+            <Link to="/sales-history">
+              <SecondaryButton type="button">Sales History</SecondaryButton>
+            </Link>
           </div>
         </div>
 
-        {/* TABS */}
-        <div className="flex gap-2 border-b border-white/10 pb-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Card title={`${items.length} items`} desc="Total inventory records" />
+          <Card title={`${lowStockCount} low stock`} desc="Items at or below minimum level" />
+          <Card title={`${usersList.length} users`} desc="Registered user profiles" />
+          <Card
+            title={formatCurrency(totalRevenueEstimate)}
+            desc="Estimated inventory sales value"
+          />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Card
+            title={`${salesAnalytics.totalSalesCount}`}
+            desc="Total sales transactions recorded"
+          />
+          <Card
+            title={`${salesAnalytics.totalUnitsSold}`}
+            desc="Total units sold across all items"
+          />
+          <Card
+            title={formatCurrency(salesAnalytics.totalRevenue)}
+            desc="Total revenue from recorded sales"
+          />
+          <Card
+            title={formatCurrency(salesAnalytics.totalProfit)}
+            desc="Total estimated profit from sales"
+          />
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-3">
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Visual Analytics"
+              title="Top Selling Items"
+              pill="Bar Chart"
+            />
+
+            <p className="mt-2 text-xs leading-5 text-white/55">
+              Displays the highest-selling products by unit count.
+            </p>
+
+            <div className="mt-4 h-72">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading chart...
+                </div>
+              ) : chartData.salesByItemChart.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  No sales data available for chart.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartData.salesByItemChart}
+                    margin={{ top: 10, right: 10, left: -20, bottom: 10 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis dataKey="name" stroke="#cbd5e1" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#cbd5e1" tick={{ fontSize: 12 }} allowDecimals={false} />
+                    <Tooltip content={<CustomBarTooltip />} />
+                    <Bar dataKey="units" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Visual Analytics"
+              title="Revenue Trend"
+              pill="Line Chart"
+            />
+
+            <p className="mt-2 text-xs leading-5 text-white/55">
+              Shows revenue movement across the most recent recorded days.
+            </p>
+
+            <div className="mt-4 h-72">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading chart...
+                </div>
+              ) : chartData.revenueTrend.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  No revenue trend data available yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={chartData.revenueTrend}
+                    margin={{ top: 10, right: 10, left: -10, bottom: 10 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis dataKey="label" stroke="#cbd5e1" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#cbd5e1" tick={{ fontSize: 12 }} />
+                    <Tooltip content={<CustomLineTooltip />} />
+                    <Line
+                      type="monotone"
+                      dataKey="revenue"
+                      stroke="#818cf8"
+                      strokeWidth={3}
+                      dot={{ r: 4, fill: "#a5b4fc" }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Visual Analytics"
+              title="Low Stock Overview"
+              pill="Pie Chart"
+            />
+
+            <p className="mt-2 text-xs leading-5 text-white/55">
+              Compares low stock items against healthy inventory items.
+            </p>
+
+            <div className="mt-4 h-72">
+              {loading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading chart...
+                </div>
+              ) : items.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  No inventory data available yet.
+                </div>
+              ) : lowStockCount === 0 ? (
+                <div className="flex h-full items-center justify-center rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-center text-sm text-white/70">
+                  No low stock items detected. Inventory is currently in a healthy state.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={lowStockPieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={90}
+                      dataKey="value"
+                      paddingAngle={3}
+                    >
+                      {lowStockPieData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${entry.name}`}
+                          fill={PIE_COLORS[index % PIE_COLORS.length]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomPieTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+
+            <div className="mt-3 flex items-center gap-4 text-xs text-white/60 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-3 w-3 rounded-full bg-[#fb7185]" />
+                <span>Low Stock</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-3 w-3 rounded-full bg-[#818cf8]" />
+                <span>Healthy Stock</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Sales Insights"
+              title="Top Selling Items"
+              pill="Top 5"
+            />
+
+            <div className="mt-4 space-y-3">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading sales insights...
+                </div>
+              ) : salesAnalytics.topSellingItems.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  No sales data available yet.
+                </div>
+              ) : (
+                salesAnalytics.topSellingItems.map((item, index) => (
+                  <div
+                    key={`${item.sku}-${index}`}
+                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="text-sm text-white/60">#{index + 1}</div>
+                        <div className="mt-1 font-semibold text-white break-words">
+                          {item.itemName}
+                        </div>
+                        <div className="text-xs text-white/60">SKU: {item.sku}</div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold text-white">
+                          {item.totalUnits} units
+                        </div>
+                        <div className="text-xs text-white/60">
+                          {formatCurrency(item.totalRevenue)}
+                        </div>
+                        <div className="text-xs text-white/50">
+                          {item.transactions} transaction(s)
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Recent Activity"
+              title="Latest Sales Transactions"
+              pill="Recent 5"
+            />
+
+            <div className="mt-4 space-y-3">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading recent sales...
+                </div>
+              ) : salesAnalytics.recentSales.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  No recent sales found.
+                </div>
+              ) : (
+                salesAnalytics.recentSales.map((sale) => (
+                  <div
+                    key={sale.id}
+                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white break-words">
+                          {sale.itemName}
+                        </div>
+                        <div className="text-xs text-white/60">SKU: {sale.sku}</div>
+                        <div className="mt-1 text-xs text-white/50 break-all">
+                          Sold by {sale.soldByEmail || "-"}
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold text-white">
+                          {sale.quantitySold} unit(s)
+                        </div>
+                        <div className="text-xs text-white/60">
+                          {formatCurrency(sale.totalPrice)}
+                        </div>
+                        <div className="mt-1 text-xs text-white/50">
+                          {formatDate(sale.soldAt)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="AI Insights"
+              title="Smart Business Signals"
+              pill={`${aiInsights.insights.length} insights`}
+            />
+
+            <div className="mt-4 space-y-3">
+              {aiInsights.insights.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Not enough sales and inventory data yet to generate insights.
+                </div>
+              ) : (
+                aiInsights.insights.map((insight, index) => (
+                  <div
+                    key={`${insight.title}-${index}`}
+                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Pill
+                        className={
+                          insight.type === "warning"
+                            ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
+                            : insight.type === "success"
+                            ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
+                            : "bg-blue-500/15 text-blue-200 ring-blue-500/20"
+                        }
+                      >
+                        {insight.type === "warning"
+                          ? "Warning"
+                          : insight.type === "success"
+                          ? "Opportunity"
+                          : "Insight"}
+                      </Pill>
+
+                      <div className="font-semibold text-white">{insight.title}</div>
+                    </div>
+
+                    <div className="mt-2 text-sm leading-6 text-white/75">{insight.text}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="AI Recommendations"
+              title="Suggested Next Actions"
+              pill={`${aiInsights.recommendations.length} actions`}
+            />
+
+            <div className="mt-4 space-y-3">
+              {aiInsights.recommendations.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Add more inventory and sales data to get action recommendations.
+                </div>
+              ) : (
+                aiInsights.recommendations.map((rec, index) => (
+                  <div
+                    key={`${rec.title}-${index}`}
+                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Pill
+                        className={
+                          rec.priority === "High"
+                            ? "bg-red-500/15 text-red-200 ring-red-500/20"
+                            : rec.priority === "Medium"
+                            ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
+                            : "bg-slate-500/20 text-slate-200 ring-slate-400/20"
+                        }
+                      >
+                        {rec.priority} Priority
+                      </Pill>
+
+                      <div className="font-semibold text-white">{rec.title}</div>
+                    </div>
+
+                    <div className="mt-2 text-sm leading-6 text-white/75">{rec.text}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-6">
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <SectionTitle
+                eyebrow="System Alerts"
+                title="Notifications Preview"
+                pill={notificationsLoading ? "Loading..." : `${[...lowStockPreviewAlerts, ...notifications].length} recent`}
+              />
+              <Link to="/notifications">
+                <SecondaryButton>View All</SecondaryButton>
+              </Link>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {notificationsLoading ? (
+                <div className="col-span-full rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 text-sm text-white/70">
+                  Loading notifications...
+                </div>
+              ) : [...lowStockPreviewAlerts, ...notifications].length === 0 ? (
+                <div className="col-span-full rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 text-sm text-white/70">
+                  No notifications available.
+                </div>
+              ) : (
+                [...lowStockPreviewAlerts, ...notifications].slice(0, 3).map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`rounded-2xl ring-1 p-4 flex flex-col justify-between ${
+                      notif.id?.startsWith("low-stock-")
+                        ? "bg-amber-500/[0.05] ring-amber-500/20"
+                        : notif.isRead
+                        ? "bg-white/[0.02] ring-white/10 opacity-70"
+                        : "bg-white/5 ring-white/20 shadow-lg"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        {!notif.isRead && <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />}
+                        <span className="font-semibold text-white truncate text-sm">{notif.title}</span>
+                      </div>
+                      <p className="text-xs text-white/70 line-clamp-2">{notif.message}</p>
+                    </div>
+                    <div className="mt-3 text-xs text-white/50">{formatDate(notif.createdAt)}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-2 border-b border-white/10 pb-4 flex-wrap">
           <button
             onClick={() => setActiveTab("inventory")}
             className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
@@ -430,6 +1401,7 @@ export default function AdminDashboard() {
           >
             Inventory
           </button>
+
           <button
             onClick={() => setActiveTab("users")}
             className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
@@ -438,8 +1410,9 @@ export default function AdminDashboard() {
                 : "text-white/60 hover:text-white hover:bg-white/5"
             }`}
           >
-            Staff & Admins
+            User Management
           </button>
+
           <button
             onClick={() => setActiveTab("approvals")}
             className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
@@ -454,361 +1427,394 @@ export default function AdminDashboard() {
 
         {activeTab === "inventory" && (
           <>
-            {/* Form + Search + Guidelines Section */}
-        <div className="grid gap-6 lg:grid-cols-12">
-          {/* Form */}
-          <div className="lg:col-span-7">
-            <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6 h-full flex flex-col">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm text-white/70">
-                    {mode === "add" ? "Add new item" : "Edit item"}
+            <div className="grid gap-6 lg:grid-cols-12">
+              <div className="lg:col-span-7">
+                <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6 h-full flex flex-col">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm text-white/70">
+                        {mode === "add" ? "Add new item" : "Edit item"}
+                      </div>
+                      <div className="mt-1 text-lg font-semibold text-white">
+                        {mode === "add" ? "Create inventory item" : "Update inventory item"}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      {mode === "edit" ? (
+                        <button
+                          onClick={resetForm}
+                          className="rounded-2xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
+                        >
+                          Cancel edit
+                        </button>
+                      ) : null}
+                      <button
+                        onClick={() => setShowBulkImport(true)}
+                        className="rounded-2xl bg-indigo-500/80 ring-1 ring-indigo-500/50 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition"
+                      >
+                        📂 Import CSV
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-1 text-lg font-semibold text-white">
-                    {mode === "add" ? "Create inventory item" : "Update inventory item"}
+
+                  <form onSubmit={onSubmit} className="mt-5 grid gap-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Item Name">
+                        <Input
+                          value={form.itemName}
+                          onChange={(e) => setForm((p) => ({ ...p, itemName: e.target.value }))}
+                          placeholder="Milk Powder 400g"
+                          autoComplete="off"
+                        />
+                      </Field>
+
+                      <Field label="SKU">
+                        <Input
+                          value={form.sku}
+                          onChange={(e) => setForm((p) => ({ ...p, sku: e.target.value }))}
+                          placeholder="MILK-001"
+                          autoComplete="off"
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Category">
+                        <Input
+                          value={form.category}
+                          onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
+                          placeholder="Groceries"
+                          autoComplete="off"
+                        />
+                      </Field>
+
+                      {/* Supplier linked selector */}
+                      <Field label="Supplier">
+                        {selectedSupplier ? (
+                          <div className="rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-500/20 px-3 py-2 flex items-center justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-white">{selectedSupplier.name}</div>
+                              {selectedSupplier.phone && <div className="text-xs text-white/50">{selectedSupplier.phone}</div>}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => { setSelectedSupplier(null); setSupplierSearch(""); setForm((p) => ({ ...p, supplier: "" })); }}
+                              className="rounded-lg bg-white/5 ring-1 ring-white/15 px-2 py-0.5 text-xs font-semibold text-white/70 hover:bg-white/10 shrink-0"
+                            >Clear</button>
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <Input
+                              value={supplierSearch}
+                              onChange={(e) => { setSupplierSearch(e.target.value); setForm((p) => ({ ...p, supplier: e.target.value })); }}
+                              placeholder="Search or type supplier name…"
+                              autoComplete="off"
+                            />
+                            {supplierSearch.trim() && suppliers.filter((s) => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).length > 0 && (
+                              <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-2xl bg-slate-800 ring-1 ring-white/15 shadow-2xl overflow-hidden">
+                                {suppliers.filter((s) => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).slice(0, 5).map((s) => (
+                                  <button
+                                    key={s.id}
+                                    type="button"
+                                    onClick={() => { setSelectedSupplier(s); setSupplierSearch(""); setForm((p) => ({ ...p, supplier: s.name })); }}
+                                    className="w-full text-left px-4 py-2.5 hover:bg-white/10 border-b border-white/5 last:border-0 text-sm text-white"
+                                  >
+                                    <div className="font-medium">{s.name}</div>
+                                    {s.contactPerson && <div className="text-xs text-white/50">{s.contactPerson} {s.phone && `· ${s.phone}`}</div>}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </Field>
+                    </div>
+
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <Field label="Quantity">
+                        <Input
+                          type="number"
+                          value={form.quantity}
+                          onChange={(e) => setForm((p) => ({ ...p, quantity: e.target.value }))}
+                        />
+                      </Field>
+
+                      <Field label="Min Stock Level">
+                        <Input
+                          type="number"
+                          value={form.minStockLevel}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, minStockLevel: e.target.value }))
+                          }
+                        />
+                      </Field>
+
+                      <Field label="Buying Price">
+                        <Input
+                          type="number"
+                          value={form.buyingPrice}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, buyingPrice: e.target.value }))
+                          }
+                        />
+                      </Field>
+
+                      <Field label="Selling Price">
+                        <Input
+                          type="number"
+                          value={form.sellingPrice}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, sellingPrice: e.target.value }))
+                          }
+                        />
+                      </Field>
+                    </div>
+
+                    <Field label="Location">
+                      <Input
+                        value={form.location}
+                        onChange={(e) => setForm((p) => ({ ...p, location: e.target.value }))}
+                        placeholder="Rack A1"
+                        autoComplete="off"
+                      />
+                    </Field>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <PrimaryButton type="submit" disabled={busy}>
+                        {busy ? "Saving..." : mode === "add" ? "Add Item" : "Save Changes"}
+                      </PrimaryButton>
+
+                      <SecondaryButton
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          resetForm();
+                          setMsg("");
+                        }}
+                      >
+                        Reset
+                      </SecondaryButton>
+                    </div>
+
+                    {msg ? (
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
+                        {msg}
+                      </div>
+                    ) : null}
+                  </form>
+                </div>
+              </div>
+
+              <div className="lg:col-span-5 flex flex-col gap-6 h-full">
+                <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col gap-4 flex-1">
+                  <div className="w-full">
+                    <div className="text-sm text-white/70">Search Inventory</div>
+                    <div className="mt-2">
+                      <Input
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search by item / sku / category / supplier..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-auto w-full grid gap-3 sm:grid-cols-2">
+                    <Card title={`${items.length} items`} desc="Total inventory records." />
+                    <Card title={`${lowStockCount} low`} desc="Needs replenishment." />
                   </div>
                 </div>
-                {mode === "edit" ? (
-                  <button
-                    onClick={resetForm}
-                    className="rounded-2xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
-                  >
-                    Cancel edit
-                  </button>
+
+                <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6">
+                  <div className="grid gap-3">
+                    <Pill>Inventory Guidelines</Pill>
+                    <Card title="SKU Control" desc="Keep every SKU unique for accurate tracking." />
+                    <Card
+                      title="Pricing"
+                      desc="Buying and selling prices support future business analytics."
+                    />
+                    <Card
+                      title="Low Stock"
+                      desc="Items at or below minimum stock should be reordered."
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-12">
+              <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
+                <SectionTitle
+                  eyebrow="Inventory Table"
+                  title="Live Inventory Records"
+                  pill={`${filteredItems.length} showing`}
+                />
+
+                <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
+                  <table className="min-w-[1100px] w-full text-sm">
+                    <thead className="bg-white/5 text-white/70">
+                      <tr>
+                        <th className="text-left font-semibold px-4 py-3">Item</th>
+                        <th className="text-left font-semibold px-4 py-3">SKU</th>
+                        <th className="text-left font-semibold px-4 py-3">Category</th>
+                        <th className="text-left font-semibold px-4 py-3">Supplier</th>
+                        <th className="text-left font-semibold px-4 py-3">Location</th>
+                        <th className="text-right font-semibold px-4 py-3">Qty</th>
+                        <th className="text-right font-semibold px-4 py-3">Min</th>
+                        <th className="text-right font-semibold px-4 py-3">Buy</th>
+                        <th className="text-right font-semibold px-4 py-3">Sell</th>
+                        <th className="text-left font-semibold px-4 py-3">Status</th>
+                        <th className="text-right font-semibold px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-white/10">
+                      {loading ? (
+                        <tr>
+                          <td className="px-4 py-4 text-white/70" colSpan={11}>
+                            Loading...
+                          </td>
+                        </tr>
+                      ) : filteredItems.length === 0 ? (
+                        <tr>
+                          <td className="px-4 py-4 text-white/70" colSpan={11}>
+                            No inventory items found.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredItems.map((it) => {
+                          const qty = sanitizeNumber(it.quantity);
+                          const min = sanitizeNumber(it.minStockLevel);
+                          const low = qty <= min;
+
+                          return (
+                            <tr key={it.id} className="text-white/85 align-top">
+                              <td className="px-4 py-3">{it.itemName}</td>
+                              <td className="px-4 py-3">{it.sku}</td>
+                              <td className="px-4 py-3">{it.category}</td>
+                              <td className="px-4 py-3">{it.supplier || "-"}</td>
+                              <td className="px-4 py-3">{it.location || "-"}</td>
+                              <td className="px-4 py-3 text-right">{qty}</td>
+                              <td className="px-4 py-3 text-right">{min}</td>
+                              <td className="px-4 py-3 text-right">
+                                {formatCurrency(it.buyingPrice)}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                {formatCurrency(it.sellingPrice)}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={
+                                    "inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 " +
+                                    (low
+                                      ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
+                                      : "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20")
+                                  }
+                                >
+                                  {low ? "Low Stock" : "OK"}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    onClick={() => startEdit(it)}
+                                    disabled={busy}
+                                    className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-60"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => onDelete(it)}
+                                    disabled={busy}
+                                    className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-60"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 text-xs text-white/50">
+                  Tip: Low stock status is triggered when quantity is less than or equal to
+                  minimum stock level.
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeTab === "users" && (
+          <div className="grid gap-6 lg:grid-cols-12">
+            <div className="lg:col-span-5 flex flex-col gap-6">
+              <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+                <SectionTitle
+                  eyebrow="Security-focused user management"
+                  title="Role & Status Control"
+                />
+
+                <div className="mt-4 grid gap-3">
+                  <Card
+                    title="No fake account creation"
+                    desc="Users must self-register. Admin only changes role and status."
+                  />
+                  <Card
+                    title="Disable instead of delete"
+                    desc="For safety and auditability, accounts should be disabled instead of deleted."
+                  />
+                  <Card
+                    title="Least privilege"
+                    desc="Grant admin role only when absolutely necessary."
+                  />
+                </div>
+
+                {userMsg ? (
+                  <div className="mt-4 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
+                    {userMsg}
+                  </div>
                 ) : null}
               </div>
 
-              <form onSubmit={onSubmit} className="mt-5 grid gap-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Name">
-                    <Input
-                      value={form.name}
-                      onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                      placeholder="A4 Paper Pack"
-                      autoComplete="off"
-                    />
-                  </Field>
-
-                  <Field label="SKU">
-                    <Input
-                      value={form.sku}
-                      onChange={(e) => setForm((p) => ({ ...p, sku: e.target.value }))}
-                      placeholder="SKU-001"
-                      autoComplete="off"
-                    />
-                  </Field>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Field label="Qty">
-                    <Input
-                      type="number"
-                      value={form.qty}
-                      onChange={(e) => setForm((p) => ({ ...p, qty: e.target.value }))}
-                    />
-                  </Field>
-
-                  <Field label="Min Qty">
-                    <Input
-                      type="number"
-                      value={form.minQty}
-                      onChange={(e) => setForm((p) => ({ ...p, minQty: e.target.value }))}
-                    />
-                  </Field>
-
-                  <Field label="Location">
-                    <Input
-                      value={form.location}
-                      onChange={(e) => setForm((p) => ({ ...p, location: e.target.value }))}
-                      placeholder="Store Room"
-                      autoComplete="off"
-                    />
-                  </Field>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <PrimaryButton disabled={busy}>
-                    {busy ? "Saving..." : mode === "add" ? "Add Item" : "Save Changes"}
-                  </PrimaryButton>
-
-                  <SecondaryButton
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      resetForm();
-                      setMsg("");
-                    }}
-                  >
-                    Reset
-                  </SecondaryButton>
-                </div>
-
-                {msg ? (
-                  <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
-                    {msg}
-                  </div>
-                ) : null}
-              </form>
-            </div>
-          </div>
-
-          {/* Search and Guidelines (Right Column) */}
-          <div className="lg:col-span-5 flex flex-col gap-6 h-full">
-            <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col items-start gap-4 flex-1">
-              <div className="w-full">
-                <div className="text-sm text-white/70">Search</div>
+              <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6">
+                <div className="text-sm text-white/70">Search Users</div>
                 <div className="mt-2">
                   <Input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search by name / sku / location..."
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    placeholder="Search by name / email / role / status..."
+                  />
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <Card title={`${usersList.length} users`} desc="Total registered profiles." />
+                  <Card
+                    title={`${usersList.filter((u) => u.role === "admin").length} admins`}
+                    desc="High privilege users."
                   />
                 </div>
               </div>
-
-              <div className="mt-auto w-full grid gap-3 sm:grid-cols-2">
-                <Card title={`${items.length} items`} desc="Total inventory documents." />
-                <Card title={`${lowStockCount} low`} desc="Qty lower than Min Qty." />
-              </div>
             </div>
 
-            <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6">
-              <div className="grid gap-3">
-                <div><Pill>Admin Dashboard Guidelines</Pill></div>
-                <Card title="Users" desc="Next: manage staff/admin accounts safely (recommended: Custom Claims)." />
-                <Card title="Inventory" desc="You can add/edit/delete items here (Firestore live)." />
-                <Card title="Documents" desc="Next module: request/approve documents + access logs." />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Table View */}
-        <div className="grid gap-6 lg:grid-cols-12">
-          <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm text-white/70">Inventory items</div>
-                <div className="mt-1 text-lg font-semibold text-white">
-                  Live table (Firestore)
-                </div>
-              </div>
-              <Pill>{filtered.length} showing</Pill>
-            </div>
-
-            <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-              <table className="min-w-[850px] w-full text-sm">
-              <thead className="bg-white/5 text-white/70">
-                <tr>
-                  <th className="text-left font-semibold px-4 py-3">Name</th>
-                  <th className="text-left font-semibold px-4 py-3">SKU</th>
-                  <th className="text-left font-semibold px-4 py-3">Location</th>
-                  <th className="text-right font-semibold px-4 py-3">Qty</th>
-                  <th className="text-right font-semibold px-4 py-3">Min</th>
-                  <th className="text-left font-semibold px-4 py-3">Status</th>
-                  <th className="text-right font-semibold px-4 py-3">Actions</th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-white/10">
-                {loading ? (
-                  <tr>
-                    <td className="px-4 py-4 text-white/70" colSpan={7}>
-                      Loading...
-                    </td>
-                  </tr>
-                ) : filtered.length === 0 ? (
-                  <tr>
-                    <td className="px-4 py-4 text-white/70" colSpan={7}>
-                      No items found.
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((it) => {
-                    const qty = sanitizeNumber(it.qty);
-                    const min = sanitizeNumber(it.minQty);
-                    const low = qty < min;
-
-                    return (
-                      <tr key={it.id} className="text-white/85">
-                        <td className="px-4 py-3">{it.name}</td>
-                        <td className="px-4 py-3">{it.sku}</td>
-                        <td className="px-4 py-3">{it.location}</td>
-                        <td className="px-4 py-3 text-right">{qty}</td>
-                        <td className="px-4 py-3 text-right">{min}</td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={
-                              "inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 " +
-                              (low
-                                ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
-                                : "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20")
-                            }
-                          >
-                            {low ? "Low" : "OK"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              onClick={() => startEdit(it)}
-                              disabled={busy}
-                              className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-60"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => onDelete(it)}
-                              disabled={busy}
-                              className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-60"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="mt-3 text-xs text-white/50">
-            Tip: SKU unique තියාගන්න. Low stock = Qty &lt; Min Qty.
-          </div>
-        </div>
-      </div>
-      </>
-      )}
-
-      {activeTab === "users" && (
-        <>
-          {/* User Form + Guidelines */}
-          <div className="grid gap-6 lg:grid-cols-12">
-            <div className="lg:col-span-7">
-              <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6 h-full flex flex-col">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm text-white/70">
-                      {userMode === "add" ? "Add new user" : "Edit user"}
-                    </div>
-                    <div className="mt-1 text-lg font-semibold text-white">
-                      {userMode === "add" ? "Create account" : "Update account"}
-                    </div>
-                  </div>
-                  {userMode === "edit" && (
-                    <button
-                      onClick={resetUserForm}
-                      className="rounded-2xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
-                    >
-                      Cancel edit
-                    </button>
-                  )}
-                </div>
-
-                <form onSubmit={onUserSubmit} className="mt-5 grid gap-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Name">
-                      <Input
-                        value={userForm.name}
-                        onChange={(e) => setUserForm((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="John Doe"
-                        autoComplete="off"
-                      />
-                    </Field>
-
-                    <Field label="Email">
-                      <Input
-                        type="email"
-                        value={userForm.email}
-                        onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))}
-                        placeholder="john@example.com"
-                        autoComplete="off"
-                      />
-                    </Field>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Role">
-                      <select
-                        value={userForm.role}
-                        onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value }))}
-                        className="w-full rounded-2xl bg-white/5 ring-1 ring-white/15 px-4 py-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-500/50 appearance-none"
-                      >
-                        <option value="staff" className="bg-slate-800">Staff</option>
-                        <option value="admin" className="bg-slate-800">Admin</option>
-                      </select>
-                    </Field>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2 mt-2">
-                    <PrimaryButton disabled={userBusy}>
-                      {userBusy ? "Saving..." : userMode === "add" ? "Add User" : "Save Changes"}
-                    </PrimaryButton>
-
-                    <SecondaryButton
-                      type="button"
-                      disabled={userBusy}
-                      onClick={() => {
-                        resetUserForm();
-                        setUserMsg("");
-                      }}
-                    >
-                      Reset
-                    </SecondaryButton>
-                  </div>
-
-                  {userMsg && (
-                    <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
-                      {userMsg}
-                    </div>
-                  )}
-                </form>
-              </div>
-            </div>
-
-            <div className="lg:col-span-5 flex flex-col gap-6 h-full">
-               <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col items-start gap-4 flex-1">
-                 <div className="w-full">
-                   <div className="text-sm text-white/70">Search Users</div>
-                   <div className="mt-2">
-                     <Input
-                       value={userSearch}
-                       onChange={(e) => setUserSearch(e.target.value)}
-                       placeholder="Search by name / email..."
-                     />
-                   </div>
-                 </div>
-
-                 <div className="mt-auto w-full grid gap-3 sm:grid-cols-2">
-                   <Card title={`${usersList.length} users`} desc="Total accounts registered." />
-                   <Card title={`${usersList.filter(u => u.role === 'admin').length} admins`} desc="Users with max privileges." />
-                 </div>
-               </div>
-            </div>
-          </div>
-
-          {/* User Table */}
-          <div className="grid gap-6 lg:grid-cols-12 mt-6">
-            <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm text-white/70">Registered Users</div>
-                  <div className="mt-1 text-lg font-semibold text-white">
-                    User Accounts
-                  </div>
-                </div>
-                <Pill>{filteredUsers.length} showing</Pill>
-              </div>
+            <div className="lg:col-span-7 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
+              <SectionTitle
+                eyebrow="Registered Users"
+                title="Role & Status Management"
+                pill={`${filteredUsers.length} showing`}
+              />
 
               <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                <table className="min-w-[800px] w-full text-sm">
+                <table className="min-w-[850px] w-full text-sm">
                   <thead className="bg-white/5 text-white/70">
                     <tr>
                       <th className="text-left font-semibold px-4 py-3">Name</th>
                       <th className="text-left font-semibold px-4 py-3">Email</th>
                       <th className="text-left font-semibold px-4 py-3">Role</th>
+                      <th className="text-left font-semibold px-4 py-3">Status</th>
                       <th className="text-right font-semibold px-4 py-3">Actions</th>
                     </tr>
                   </thead>
@@ -816,156 +1822,225 @@ export default function AdminDashboard() {
                   <tbody className="divide-y divide-white/10">
                     {usersLoading ? (
                       <tr>
-                        <td className="px-4 py-4 text-white/70" colSpan={4}>Loading...</td>
+                        <td className="px-4 py-4 text-white/70" colSpan={5}>
+                          Loading users...
+                        </td>
                       </tr>
                     ) : filteredUsers.length === 0 ? (
                       <tr>
-                        <td className="px-4 py-4 text-white/70" colSpan={4}>No users found.</td>
+                        <td className="px-4 py-4 text-white/70" colSpan={5}>
+                          No users found.
+                        </td>
                       </tr>
                     ) : (
-                      filteredUsers.map((u) => (
-                        <tr key={u.id} className="text-white/85">
-                          <td className="px-4 py-3">{u.name}</td>
-                          <td className="px-4 py-3">{u.email}</td>
-                          <td className="px-4 py-3">
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${u.role === 'admin' ? 'bg-indigo-500/15 text-indigo-200 ring-indigo-500/20' : 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/20'}`}>
-                              {u.role || "staff"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-2">
-                              <button
-                                onClick={() => startUserEdit(u)}
-                                disabled={userBusy}
-                                className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-60"
+                      filteredUsers.map((u) => {
+                        const isSelf = u.id === user.uid;
+
+                        return (
+                          <tr key={u.id} className="text-white/85 align-top">
+                            <td className="px-4 py-3">{u.name || "-"}</td>
+                            <td className="px-4 py-3 break-all">{u.email}</td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
+                                  u.role === "admin"
+                                    ? "bg-indigo-500/15 text-indigo-200 ring-indigo-500/20"
+                                    : "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
+                                }`}
                               >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => onUserDelete(u)}
-                                disabled={userBusy}
-                                className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-60"
+                                {u.role || "staff"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
+                                  (u.status || "active") === "active"
+                                    ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
+                                    : "bg-red-500/15 text-red-200 ring-red-500/20"
+                                }`}
                               >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                                {u.status || "active"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-2 flex-wrap">
+                                <button
+                                  disabled={isSelf}
+                                  onClick={() =>
+                                    handleUserRoleChange(
+                                      u,
+                                      (u.role || "staff") === "admin" ? "staff" : "admin"
+                                    )
+                                  }
+                                  className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-40"
+                                >
+                                  {(u.role || "staff") === "admin" ? "Make Staff" : "Make Admin"}
+                                </button>
+
+                                <button
+                                  disabled={isSelf}
+                                  onClick={() =>
+                                    handleUserStatusChange(
+                                      u,
+                                      (u.status || "active") === "active"
+                                        ? "disabled"
+                                        : "active"
+                                    )
+                                  }
+                                  className="rounded-xl bg-amber-500/15 ring-1 ring-amber-500/25 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-40"
+                                >
+                                  {(u.status || "active") === "active" ? "Disable" : "Activate"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
               </div>
             </div>
           </div>
-        </>
-      )}
+        )}
 
-      {activeTab === "approvals" && (
-        <>
-          <div className="grid gap-6 lg:grid-cols-12">
-            <div className="lg:col-span-12 flex flex-col gap-6">
-               <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col md:flex-row items-center justify-between gap-4">
-                 <div className="w-full md:max-w-xs">
-                   <div className="text-sm text-white/70">Search Documents</div>
-                   <div className="mt-2">
-                     <Input
-                       value={docSearch}
-                       onChange={(e) => setDocSearch(e.target.value)}
-                       placeholder="Search by title or author..."
-                     />
-                   </div>
-                 </div>
+        {activeTab === "approvals" && (
+          <>
+            <div className="grid gap-6 lg:grid-cols-12">
+              <div className="lg:col-span-12 flex flex-col gap-6">
+                <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                  <div className="w-full md:max-w-xs">
+                    <div className="text-sm text-white/70">Search Documents</div>
+                    <div className="mt-2">
+                      <Input
+                        value={docSearch}
+                        onChange={(e) => setDocSearch(e.target.value)}
+                        placeholder="Search by title / owner / status..."
+                      />
+                    </div>
+                  </div>
 
-                 <div className="flex gap-3">
-                   <Card title={`${docsList.length} total`} desc="Uploaded docs." />
-                   <Card title={`${docsList.filter(d => d.status === 'pending').length} pending`} desc="Awaiting approval." />
-                 </div>
-               </div>
-            </div>
-          </div>
-
-          {/* Document Table */}
-          <div className="grid gap-6 lg:grid-cols-12 mt-6">
-            <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm text-white/70">Document Workflows</div>
-                  <div className="mt-1 text-lg font-semibold text-white">
-                    Approve & Reject Documents
+                  <div className="flex gap-3 flex-wrap">
+                    <Card title={`${docsList.length} total`} desc="Uploaded docs." />
+                    <Card
+                      title={`${docsList.filter((d) => d.status === "pending").length} pending`}
+                      desc="Awaiting approval."
+                    />
                   </div>
                 </div>
-                <Pill>{filteredDocs.length} showing</Pill>
-              </div>
-
-              {docMsg && (
-                <div className="mt-4 rounded-xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
-                  {docMsg}
-                </div>
-              )}
-
-              <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                <table className="min-w-[800px] w-full text-sm">
-                  <thead className="bg-white/5 text-white/70">
-                    <tr>
-                      <th className="text-left font-semibold px-4 py-3">Title</th>
-                      <th className="text-left font-semibold px-4 py-3">Uploader</th>
-                      <th className="text-left font-semibold px-4 py-3">Status</th>
-                      <th className="text-right font-semibold px-4 py-3">Actions</th>
-                    </tr>
-                  </thead>
-
-                  <tbody className="divide-y divide-white/10">
-                    {docsLoading ? (
-                      <tr>
-                        <td className="px-4 py-4 text-white/70" colSpan={4}>Loading Documents...</td>
-                      </tr>
-                    ) : filteredDocs.length === 0 ? (
-                      <tr>
-                        <td className="px-4 py-4 text-white/70" colSpan={4}>No documents found.</td>
-                      </tr>
-                    ) : (
-                      filteredDocs.map((d) => (
-                        <tr key={d.id} className="text-white/85">
-                          <td className="px-4 py-3 font-medium">
-                            <div>{d.title}</div>
-                            {d.description && <div className="text-xs text-white/50 mt-1">{d.description}</div>}
-                          </td>
-                          <td className="px-4 py-3">{d.ownerName}</td>
-                          <td className="px-4 py-3">
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${d.status === 'approved' ? 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/20' : d.status === 'rejected' ? 'bg-red-500/15 text-red-200 ring-red-500/20' : 'bg-amber-500/15 text-amber-200 ring-amber-500/20'}`}>
-                              {d.status === 'pending' ? 'Pending Review' : d.status.charAt(0).toUpperCase() + d.status.slice(1)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-2">
-                              <button
-                                onClick={() => updateDocStatus(d.id, "approved")}
-                                disabled={docBusy || d.status === 'approved'}
-                                className="rounded-xl bg-emerald-500/15 ring-1 ring-emerald-500/25 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
-                              >
-                                Approve
-                              </button>
-                              <button
-                                onClick={() => updateDocStatus(d.id, "rejected")}
-                                disabled={docBusy || d.status === 'rejected'}
-                                className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-40"
-                              >
-                                Reject
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
               </div>
             </div>
-          </div>
-        </>
-      )}
+
+            <div className="grid gap-6 lg:grid-cols-12">
+              <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
+                <SectionTitle
+                  eyebrow="Document Workflow"
+                  title="Approve and Reject Requests"
+                  pill={`${filteredDocs.length} showing`}
+                />
+
+                {docMsg ? (
+                  <div className="mt-4 rounded-xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
+                    {docMsg}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
+                  <table className="min-w-[850px] w-full text-sm">
+                    <thead className="bg-white/5 text-white/70">
+                      <tr>
+                        <th className="text-left font-semibold px-4 py-3">Title</th>
+                        <th className="text-left font-semibold px-4 py-3">Owner</th>
+                        <th className="text-left font-semibold px-4 py-3">Status</th>
+                        <th className="text-right font-semibold px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-white/10">
+                      {docsLoading ? (
+                        <tr>
+                          <td className="px-4 py-4 text-white/70" colSpan={4}>
+                            Loading documents...
+                          </td>
+                        </tr>
+                      ) : filteredDocs.length === 0 ? (
+                        <tr>
+                          <td className="px-4 py-4 text-white/70" colSpan={4}>
+                            No documents found.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredDocs.map((d) => (
+                          <tr key={d.id} className="text-white/85 align-top">
+                            <td className="px-4 py-3 font-medium">
+                              <div>{d.title || "-"}</div>
+                              {d.description ? (
+                                <div className="text-xs text-white/50 mt-1 leading-5">
+                                  {d.description}
+                                </div>
+                              ) : null}
+                              {d.status === "approved" && d.approvedByEmail && (
+                                <div className="mt-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-200">
+                                  <div><strong className="font-semibold text-emerald-300">Approved By:</strong> {d.approvedByEmail}</div>
+                                  {d.approvedAt && <div><strong className="font-semibold text-emerald-300">Date:</strong> {formatDate(d.approvedAt)}</div>}
+                                </div>
+                              )}
+                              {d.status === "rejected" && d.rejectedByEmail && (
+                                <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-200">
+                                  <div><strong className="font-semibold text-red-300">Rejected By:</strong> {d.rejectedByEmail}</div>
+                                  {d.rejectedAt && <div><strong className="font-semibold text-red-300">Date:</strong> {formatDate(d.rejectedAt)}</div>}
+                                  {d.rejectionReason && <div className="mt-1"><strong className="font-semibold text-red-300">Reason:</strong> {d.rejectionReason}</div>}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">{d.ownerName || "-"}</td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
+                                  d.status === "approved"
+                                    ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
+                                    : d.status === "rejected"
+                                    ? "bg-red-500/15 text-red-200 ring-red-500/20"
+                                    : "bg-amber-500/15 text-amber-200 ring-amber-500/20"
+                                }`}
+                              >
+                                {d.status === "pending"
+                                  ? "Pending Review"
+                                  : (d.status || "pending").charAt(0).toUpperCase() +
+                                    (d.status || "pending").slice(1)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-2 flex-wrap">
+                                <button
+                                  onClick={() => requestDocumentStatusChange(d, "approved")}
+                                  disabled={docBusy || d.status === "approved"}
+                                  className="rounded-xl bg-emerald-500/15 ring-1 ring-emerald-500/25 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
+                                >
+                                  Approve
+                                </button>
+
+                                <button
+                                  onClick={() => requestDocumentStatusChange(d, "rejected")}
+                                  disabled={docBusy || d.status === "rejected"}
+                                  className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-40"
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </PageShell>
+    </>
   );
 }

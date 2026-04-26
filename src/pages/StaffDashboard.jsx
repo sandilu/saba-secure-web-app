@@ -1,36 +1,48 @@
-// src/pages/StaffDashboard.jsx
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import {
   PageShell,
   Card,
   Pill,
   PrimaryButton,
+  SecondaryButton,
   Input,
   Field,
 } from "../ui/Layout";
-import { collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase/firebaseConfig";
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  onSnapshot,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "../firebase/firebaseServices";
 import { logAction } from "../firebase/auditLogger";
 import { listenInventoryItems } from "../firebase/inventoryActions";
-import { logout } from "../firebase/authActions";
 
 export default function StaffDashboard() {
-  const { user, profile } = useAuth();
+  const navigate = useNavigate();
+  const { user, profile, logout } = useAuth();
 
   const [items, setItems] = useState([]);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
+  const [inventorySearch, setInventorySearch] = useState("");
 
-  // --- Document State ---
-  const [activeTab, setActiveTab] = useState("inventory"); // "inventory" | "documents"
+  const [activeTab, setActiveTab] = useState("inventory");
+
   const [docs, setDocs] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(true);
   const [docErr, setDocErr] = useState("");
   const [uploadBusy, setUploadBusy] = useState(false);
   const [docMsg, setDocMsg] = useState("");
 
-  const [docForm, setDocForm] = useState({ title: "", description: "" });
+  const [docForm, setDocForm] = useState({
+    title: "",
+    description: "",
+  });
 
   useEffect(() => {
     setErr("");
@@ -50,9 +62,9 @@ export default function StaffDashboard() {
     return () => unsub();
   }, []);
 
-  // Fetch only documents meant for this user
   useEffect(() => {
     if (!user) return;
+
     setDocErr("");
     setLoadingDocs(true);
 
@@ -67,6 +79,7 @@ export default function StaffDashboard() {
         const data = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+
         setDocs(data);
         setLoadingDocs(false);
       },
@@ -76,8 +89,47 @@ export default function StaffDashboard() {
         setLoadingDocs(false);
       }
     );
+
     return () => unsub();
   }, [user]);
+
+  const filteredItems = useMemo(() => {
+    const s = inventorySearch.trim().toLowerCase();
+    if (!s) return items;
+
+    return items.filter((item) => {
+      const itemName = String(item.itemName || "").toLowerCase();
+      const sku = String(item.sku || "").toLowerCase();
+      const category = String(item.category || "").toLowerCase();
+      const supplier = String(item.supplier || "").toLowerCase();
+      const location = String(item.location || "").toLowerCase();
+
+      return (
+        itemName.includes(s) ||
+        sku.includes(s) ||
+        category.includes(s) ||
+        supplier.includes(s) ||
+        location.includes(s)
+      );
+    });
+  }, [items, inventorySearch]);
+
+  const lowStock = useMemo(() => {
+    return items.filter(
+      (i) => Number(i.quantity || 0) <= Number(i.minStockLevel || 0)
+    );
+  }, [items]);
+
+  const totalInventoryItems = items.length;
+
+  async function handleLogout() {
+    try {
+      await logout();
+      navigate("/login");
+    } catch (e) {
+      console.error("Logout failed:", e);
+    }
+  }
 
   const handleUpload = async (e) => {
     e.preventDefault();
@@ -90,46 +142,48 @@ export default function StaffDashboard() {
     }
 
     setUploadBusy(true);
+
     try {
       await addDoc(collection(db, "documents"), {
         title: docForm.title.trim(),
         description: docForm.description.trim(),
         ownerUid: user.uid,
         ownerName: profile?.name || user.email,
-        status: "pending", // Default to pending
+        status: "pending",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
 
-      // ---- AUDIT LOG ----
-      logAction("DOCUMENT_REQUEST", user.uid, user.email, {
-        title: docForm.title.trim()
-      });
+      await logAction(
+        "DOCUMENT_REQUEST",
+        user.uid,
+        user.email,
+        {
+          title: docForm.title.trim(),
+        },
+        "document",
+        ""
+      );
 
-      setDocMsg("✅ Document request submitted.");
+      setDocMsg("✅ Document request submitted successfully.");
       setDocForm({ title: "", description: "" });
     } catch (e) {
       console.error(e);
-      setDocErr("Failed to submit document. Ensure rules match.");
+      setDocErr("Failed to submit document request.");
     } finally {
       setUploadBusy(false);
     }
   };
 
-  const lowStock = useMemo(() => {
-    return items.filter((i) => Number(i.qty) <= Number(i.minQty));
-  }, [items]);
-
   return (
     <PageShell>
       <div className="grid gap-6">
         <div className="grid gap-4 lg:grid-cols-12">
-          {/* Left */}
           <div className="lg:col-span-7">
-            <div className="glass rounded-3xl p-6 md:p-8 shadow-soft">
+            <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-6 md:p-8">
               <Pill>Staff Dashboard</Pill>
 
-              <h1 className="mt-3 text-2xl md:text-3xl font-semibold tracking-tight">
+              <h1 className="mt-3 text-2xl md:text-3xl font-semibold tracking-tight text-white">
                 Welcome, {profile?.name || user?.email}
               </h1>
 
@@ -137,18 +191,35 @@ export default function StaffDashboard() {
                 <span className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2 text-sm text-white/80">
                   Role: <b className="text-white">{profile?.role || "staff"}</b>
                 </span>
+
                 <span className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2 text-sm text-white/80">
-                  Status:{" "}
-                  <b className="text-white">{profile?.status || "active"}</b>
+                  Status: <b className="text-white">{profile?.status || "active"}</b>
                 </span>
+
                 <span className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2 text-sm text-white/80">
-                  Low stock:{" "}
-                  <b className="text-white">{lowStock.length}</b>
+                  Inventory Items: <b className="text-white">{totalInventoryItems}</b>
+                </span>
+
+                <span className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2 text-sm text-white/80">
+                  Low Stock: <b className="text-white">{lowStock.length}</b>
                 </span>
               </div>
 
-              <div className="mt-5 max-w-xs">
-                <PrimaryButton onClick={logout}>Logout</PrimaryButton>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <Link to="/sales">
+                  <PrimaryButton type="button">Record Sale</PrimaryButton>
+                </Link>
+
+                <Link to="/sales-history">
+                  <SecondaryButton type="button">Sales History</SecondaryButton>
+                </Link>
+
+                <button
+                  onClick={handleLogout}
+                  className="rounded-2xl bg-white/5 ring-1 ring-white/15 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10"
+                >
+                  Logout
+                </button>
               </div>
 
               {err ? (
@@ -159,29 +230,27 @@ export default function StaffDashboard() {
             </div>
           </div>
 
-          {/* Right */}
           <div className="lg:col-span-5">
-            <div className="glass rounded-3xl p-6 md:p-8 shadow-soft">
+            <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-6 md:p-8">
               <div className="text-sm text-slate-300">Quick actions</div>
               <div className="mt-4 grid gap-3">
                 <Card
-                  title="Inventory"
-                  desc="View items from Firestore (live)."
+                  title="Inventory View"
+                  desc="View all inventory items and identify low-stock products."
                 />
                 <Card
-                  title="Documents"
-                  desc="Request access (next module)."
+                  title="Sales Recording"
+                  desc="Create sales records and automatically reduce inventory quantities."
                 />
                 <Card
-                  title="Profile"
-                  desc="Account status & permissions."
+                  title="Document Requests"
+                  desc="Submit document requests for admin review and approval."
                 />
               </div>
             </div>
           </div>
         </div>
 
-        {/* TABS */}
         <div className="flex gap-2 border-b border-white/10 pb-4">
           <button
             onClick={() => setActiveTab("inventory")}
@@ -193,6 +262,7 @@ export default function StaffDashboard() {
           >
             Inventory
           </button>
+
           <button
             onClick={() => setActiveTab("documents")}
             className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
@@ -206,161 +276,209 @@ export default function StaffDashboard() {
         </div>
 
         {activeTab === "inventory" && (
-          <div className="glass rounded-3xl p-6 md:p-8 shadow-soft">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm text-slate-300">Inventory</div>
-              <h2 className="mt-1 text-lg font-semibold">Items</h2>
-            </div>
-            <div className="text-sm text-slate-300">
-              {loading ? "Loading..." : `${items.length} items`}
-            </div>
-          </div>
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-6 md:p-8">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-sm text-slate-300">Inventory</div>
+                <h2 className="mt-1 text-lg font-semibold text-white">Available Items</h2>
+              </div>
 
-          <div className="mt-5 overflow-x-auto">
-            <table className="w-full min-w-[700px] text-left text-sm">
-              <thead className="text-slate-300">
-                <tr className="border-b border-white/10">
-                  <th className="py-3 pr-4">Name</th>
-                  <th className="py-3 pr-4">SKU</th>
-                  <th className="py-3 pr-4">Location</th>
-                  <th className="py-3 pr-4">Qty</th>
-                  <th className="py-3 pr-4">Min</th>
-                  <th className="py-3 pr-4">Status</th>
-                </tr>
-              </thead>
-              <tbody className="text-white/85">
-                {!loading && items.length === 0 ? (
+              <div className="w-full sm:w-80">
+                <Input
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  placeholder="Search by item / sku / category / supplier..."
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 overflow-x-auto rounded-2xl ring-1 ring-white/10">
+              <table className="w-full min-w-[1000px] text-left text-sm">
+                <thead className="bg-white/5 text-slate-300 border-b border-white/10">
                   <tr>
-                    <td className="py-6 text-slate-300" colSpan={6}>
-                      No items found in inventoryItems collection.
-                    </td>
+                    <th className="py-3 px-4">Item</th>
+                    <th className="py-3 px-4">SKU</th>
+                    <th className="py-3 px-4">Category</th>
+                    <th className="py-3 px-4">Supplier</th>
+                    <th className="py-3 px-4">Location</th>
+                    <th className="py-3 px-4">Qty</th>
+                    <th className="py-3 px-4">Min</th>
+                    <th className="py-3 px-4">Selling Price</th>
+                    <th className="py-3 px-4">Status</th>
                   </tr>
-                ) : null}
+                </thead>
 
-                {items.map((item) => {
-                  const qty = Number(item.qty ?? 0);
-                  const min = Number(item.minQty ?? 0);
-                  const isLow = qty <= min;
-
-                  return (
-                    <tr
-                      key={item.id}
-                      className="border-b border-white/5 hover:bg-white/5 transition"
-                    >
-                      <td className="py-3 pr-4 font-medium">
-                        {item.name || "-"}
-                      </td>
-                      <td className="py-3 pr-4 text-slate-200">
-                        {item.sku || "-"}
-                      </td>
-                      <td className="py-3 pr-4 text-slate-200">
-                        {item.location || "-"}
-                      </td>
-                      <td className="py-3 pr-4">{qty}</td>
-                      <td className="py-3 pr-4">{min}</td>
-                      <td className="py-3 pr-4">
-                        {isLow ? (
-                          <span className="inline-flex items-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/25 px-3 py-1 text-xs text-amber-200">
-                            Low
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full bg-emerald-500/15 ring-1 ring-emerald-500/25 px-3 py-1 text-xs text-emerald-200">
-                            OK
-                          </span>
-                        )}
+                <tbody className="text-white/85 divide-y divide-white/5">
+                  {loading ? (
+                    <tr>
+                      <td className="py-4 px-4 text-slate-300" colSpan={9}>
+                        Loading inventory...
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  ) : filteredItems.length === 0 ? (
+                    <tr>
+                      <td className="py-4 px-4 text-slate-300" colSpan={9}>
+                        No items found.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredItems.map((item) => {
+                      const qty = Number(item.quantity ?? 0);
+                      const min = Number(item.minStockLevel ?? 0);
+                      const isLow = qty <= min;
 
-          <div className="mt-4 text-xs text-white/55">
-            Tip: Only admins can manage the inventory live.
+                      return (
+                        <tr
+                          key={item.id}
+                          className="hover:bg-white/5 transition"
+                        >
+                          <td className="py-3 px-4 font-medium">{item.itemName || "-"}</td>
+                          <td className="py-3 px-4 text-slate-200">{item.sku || "-"}</td>
+                          <td className="py-3 px-4 text-slate-200">{item.category || "-"}</td>
+                          <td className="py-3 px-4 text-slate-200">{item.supplier || "-"}</td>
+                          <td className="py-3 px-4 text-slate-200">{item.location || "-"}</td>
+                          <td className="py-3 px-4">{qty}</td>
+                          <td className="py-3 px-4">{min}</td>
+                          <td className="py-3 px-4">Rs. {item.sellingPrice || 0}</td>
+                          <td className="py-3 px-4">
+                            {isLow ? (
+                              <span className="inline-flex items-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/25 px-3 py-1 text-xs text-amber-200">
+                                Low Stock
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-emerald-500/15 ring-1 ring-emerald-500/25 px-3 py-1 text-xs text-emerald-200">
+                                OK
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 text-xs text-white/55">
+              Tip: Staff users can view inventory and record sales, but only admins can modify inventory items.
+            </div>
           </div>
-        </div>
         )}
 
         {activeTab === "documents" && (
           <div className="grid gap-6 lg:grid-cols-12">
-            {/* Upload Form */}
             <div className="lg:col-span-5">
-              <div className="glass rounded-3xl p-6 md:p-8 shadow-soft h-full flex flex-col">
-                <div className="text-sm text-slate-300">Upload a new document</div>
-                <h2 className="mt-1 text-lg font-semibold">Document Request</h2>
-                
+              <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-6 md:p-8 h-full flex flex-col">
+                <div className="text-sm text-slate-300">Request a document</div>
+                <h2 className="mt-1 text-lg font-semibold text-white">
+                  Submit Document Request
+                </h2>
+
                 <form onSubmit={handleUpload} className="mt-5 grid gap-4 flex-1">
                   <Field label="Document Title">
                     <Input
                       value={docForm.title}
-                      onChange={(e) => setDocForm((p) => ({ ...p, title: e.target.value }))}
-                      placeholder="e.g. Q3 Restock Request"
+                      onChange={(e) =>
+                        setDocForm((p) => ({ ...p, title: e.target.value }))
+                      }
+                      placeholder="e.g. Monthly Inventory Review"
                     />
                   </Field>
+
                   <Field label="Description">
-                     <Input
+                    <Input
                       value={docForm.description}
-                      onChange={(e) => setDocForm((p) => ({ ...p, description: e.target.value }))}
+                      onChange={(e) =>
+                        setDocForm((p) => ({ ...p, description: e.target.value }))
+                      }
                       placeholder="Brief context..."
                     />
                   </Field>
+
                   <div className="mt-auto pt-4 grid gap-3">
-                    <PrimaryButton disabled={uploadBusy}>
+                    <PrimaryButton type="submit" disabled={uploadBusy}>
                       {uploadBusy ? "Submitting..." : "Submit Request"}
                     </PrimaryButton>
-                    
-                    {docErr && <div className="rounded-xl px-3 py-2 text-xs bg-red-500/10 text-red-200 mt-2">{docErr}</div>}
-                    {docMsg && <div className="rounded-xl px-3 py-2 text-xs bg-emerald-500/10 text-emerald-200 mt-2">{docMsg}</div>}
+
+                    {docErr ? (
+                      <div className="rounded-xl px-3 py-2 text-xs bg-red-500/10 text-red-200 mt-2">
+                        {docErr}
+                      </div>
+                    ) : null}
+
+                    {docMsg ? (
+                      <div className="rounded-xl px-3 py-2 text-xs bg-emerald-500/10 text-emerald-200 mt-2">
+                        {docMsg}
+                      </div>
+                    ) : null}
                   </div>
                 </form>
               </div>
             </div>
 
-            {/* Document List */}
             <div className="lg:col-span-7">
-               <div className="glass rounded-3xl p-6 md:p-8 shadow-soft min-w-0 h-full">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm text-slate-300">Submitted</div>
-                      <h2 className="mt-1 text-lg font-semibold">My Documents</h2>
-                    </div>
+              <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-6 md:p-8 min-w-0 h-full">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm text-slate-300">Submitted Documents</div>
+                    <h2 className="mt-1 text-lg font-semibold text-white">
+                      My Document Requests
+                    </h2>
                   </div>
+                </div>
 
-                  <div className="mt-5 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                    <table className="w-full min-w-[500px] text-sm text-left">
-                      <thead className="bg-white/5 text-slate-300 border-b border-white/10">
+                <div className="mt-5 overflow-x-auto rounded-2xl ring-1 ring-white/10">
+                  <table className="w-full min-w-[550px] text-sm text-left">
+                    <thead className="bg-white/5 text-slate-300 border-b border-white/10">
+                      <tr>
+                        <th className="py-3 px-4">Title</th>
+                        <th className="py-3 px-4">Description</th>
+                        <th className="py-3 px-4">Status</th>
+                      </tr>
+                    </thead>
+
+                    <tbody className="text-white/85 divide-y divide-white/5">
+                      {loadingDocs ? (
                         <tr>
-                          <th className="py-3 px-4">Title</th>
-                          <th className="py-3 px-4">Description</th>
-                          <th className="py-3 px-4">Status</th>
+                          <td className="py-4 px-4 text-slate-300" colSpan={3}>
+                            Loading...
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="text-white/85 divide-y divide-white/5">
-                        {loadingDocs ? (
-                           <tr>
-                            <td className="py-4 px-4 text-slate-300" colSpan={3}>Loading...</td>
-                          </tr>
-                        ) : docs.length === 0 ? (
-                           <tr>
-                            <td className="py-4 px-4 text-slate-300" colSpan={3}>No documents submitted yet.</td>
-                          </tr>
-                        ) : docs.map(d => (
+                      ) : docs.length === 0 ? (
+                        <tr>
+                          <td className="py-4 px-4 text-slate-300" colSpan={3}>
+                            No document requests submitted yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        docs.map((d) => (
                           <tr key={d.id} className="hover:bg-white/5 transition">
                             <td className="py-3 px-4 font-medium">{d.title}</td>
-                            <td className="py-3 px-4 text-slate-300 text-xs">{d.description || "-"}</td>
+                            <td className="py-3 px-4 text-slate-300 text-xs">
+                              {d.description || "-"}
+                            </td>
                             <td className="py-3 px-4">
-                              <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${d.status === 'approved' ? 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/20' : d.status === 'rejected' ? 'bg-red-500/15 text-red-200 ring-red-500/20' : 'bg-amber-500/15 text-amber-200 ring-amber-500/20'}`}>
-                                {d.status === 'pending' ? 'Pending Review' : d.status.charAt(0).toUpperCase() + d.status.slice(1)}
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
+                                  d.status === "approved"
+                                    ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
+                                    : d.status === "rejected"
+                                    ? "bg-red-500/15 text-red-200 ring-red-500/20"
+                                    : "bg-amber-500/15 text-amber-200 ring-amber-500/20"
+                                }`}
+                              >
+                                {d.status === "pending"
+                                  ? "Pending Review"
+                                  : d.status.charAt(0).toUpperCase() + d.status.slice(1)}
                               </span>
                             </td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-               </div>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         )}

@@ -86,6 +86,38 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ---------------- SALES ----------------
+    match /sales/{docId} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser();
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------------- CUSTOMERS ----------------
+    match /customers/{docId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------- SUPPLIERS ----------------
+    match /suppliers/{docId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------- NOTIFICATIONS ----------------
+    match /notifications/{docId} {
+      allow read, update, delete: if signedIn();
+      allow create: if signedIn();
+    }
+
+    // ---------------- LOGIN ACTIVITIES ----------------
+    match /loginActivities/{docId} {
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+
     // ---------------- DEFAULT DENY ----------------
     match /{document=**} {
       allow read, write: if false;

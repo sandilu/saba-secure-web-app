@@ -3,20 +3,32 @@ import { db } from "./firebaseServices";
 
 /**
  * Logs a sensitive action to the auditLogs collection.
- * @param {string} action - The action identifier (e.g., 'INVENTORY_CREATE').
- * @param {string} performedByUid - User ID who performed the action.
- * @param {string} performedByEmail - Email of the user who performed the action.
- * @param {Object} details - Additional metadata about the action.
+ * @param {string} action
+ * @param {string} performedByUid
+ * @param {string} performedByEmail
+ * @param {Object} details
+ * @param {string} targetType
+ * @param {string} targetId
  */
-export async function logAction(action, performedByUid, performedByEmail, details = {}) {
+export async function logAction(
+  action,
+  performedByUid,
+  performedByEmail,
+  details = {},
+  targetType = "",
+  targetId = ""
+) {
   try {
     const payload = {
       action,
       performedByUid,
       performedByEmail,
+      targetType,
+      targetId,
       details,
       timestamp: serverTimestamp(),
     };
+
     await addDoc(collection(db, "auditLogs"), payload);
     console.log(`[AuditLog]: ${action} success`);
   } catch (err) {

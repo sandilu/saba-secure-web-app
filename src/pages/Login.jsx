@@ -23,9 +23,9 @@ export default function Login() {
     e.preventDefault();
     setMsg("");
     setLoading(true);
+
     try {
       await actions.login(email, password);
-      setMsg("Login success ✅");
       nav("/dashboard");
     } catch (err) {
       setMsg(err?.message || "Login failed");
@@ -37,17 +37,9 @@ export default function Login() {
   const handleGoogle = async () => {
     setMsg("");
     setLoading(true);
+
     try {
-      const fn =
-        actions.loginWithGoogle ||
-        actions.googleLogin ||
-        actions.signInWithGoogle ||
-        actions.signInGoogle;
-
-      if (!fn) throw new Error("Google sign-in function not found in authActions.js");
-
-      await fn();
-      setMsg("Google login success ✅");
+      await actions.loginWithGoogle();
       nav("/dashboard");
     } catch (err) {
       setMsg(err?.message || "Google login failed");
@@ -56,15 +48,39 @@ export default function Login() {
     }
   };
 
+const handleForgotPassword = async () => {
+  setMsg("");
+
+  if (!email.trim()) {
+    setMsg("Please enter your email address first.");
+    return;
+  }
+
+  try {
+    await actions.forgotPassword(email);
+    setMsg("If this email is registered, a password reset email should arrive soon. Please check Inbox, Spam, and Promotions.");
+  } catch (err) {
+    console.error("Password reset failed:", err);
+    setMsg(err?.message || "Password reset failed");
+  }
+};
+
   return (
     <PageShell
       right={
         <div className="space-y-3">
-          <Pill>Tip</Pill>
-          <Card title="Email + Google" desc="Use email/password or Google to sign in faster." />
+          <Pill>Security</Pill>
           <Card
-            title="Role based access"
-            desc="After login, you will be routed to Staff/Admin dashboard."
+            title="Verified accounts only"
+            desc="Email/password users must verify their email before login."
+          />
+          <Card
+            title="Password recovery"
+            desc="Users can securely reset their password using email."
+          />
+          <Card
+            title="Role-based access"
+            desc="After login, users are redirected based on their role."
           />
         </div>
       }
@@ -74,6 +90,7 @@ export default function Login() {
         <h1 className="mt-3 text-2xl sm:text-3xl font-semibold text-white">
           Sign in to your account
         </h1>
+
         <p className="mt-2 text-sm text-white/70">
           Don’t have an account?{" "}
           <Link className="underline text-white" to="/register">
@@ -108,6 +125,14 @@ export default function Login() {
               Sign in with Google
             </SecondaryButton>
           </div>
+
+          <button
+            type="button"
+            onClick={handleForgotPassword}
+            className="text-sm underline text-white/80"
+          >
+            Forgot password?
+          </button>
 
           {msg ? (
             <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">

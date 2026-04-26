@@ -5,17 +5,29 @@ import { PageShell, Pill, Card } from "../ui/Layout";
 import { useAuth } from "../auth/AuthContext";
 
 export default function Dashboard() {
-  const { profile, loading } = useAuth();
+  const { loading, role, isDisabled } = useAuth();
   const nav = useNavigate();
 
   useEffect(() => {
     if (loading) return;
-    const role = profile?.role || "staff";
+
+    if (isDisabled) {
+      nav("/login", { replace: true });
+      return;
+    }
+
     nav(role === "admin" ? "/admin" : "/staff", { replace: true });
-  }, [loading, profile, nav]);
+  }, [loading, role, isDisabled, nav]);
 
   return (
-    <PageShell right={<Card title="Routing..." desc="Redirecting based on your Firestore role." />}>
+    <PageShell
+      right={
+        <Card
+          title="Routing..."
+          desc="Redirecting you to the correct dashboard based on your user role."
+        />
+      }
+    >
       <div className="space-y-3">
         <Pill>Dashboard</Pill>
         <div className="text-white text-lg font-semibold">Loading dashboard…</div>
