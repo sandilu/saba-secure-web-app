@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { PageShell, Field, Input, Select, PrimaryButton, SecondaryButton, Pill, Card } from "../ui/Layout";
 import { db } from "../firebase/firebaseServices";
 import { createSale } from "../firebase/salesActions";
-import { listenCustomers, getCustomerSales } from "../firebase/customerActions";
+import { listenCustomers, getCustomerSales, createCustomer } from "../firebase/customerActions";
 import { useAuth } from "../auth/AuthContext";
 import InvoicePreview from "../components/InvoicePreview";
 import { getSmartDiscount } from "../utils/discountRules";
@@ -41,6 +41,10 @@ export default function SalesPage() {
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState(null);
 
+  const [isNewCustomer, setIsNewCustomer] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+
   const customerResults = useMemo(() => {
     const s = customerSearch.trim().toLowerCase();
     if (!s || selectedCustomer) return [];
@@ -61,6 +65,12 @@ export default function SalesPage() {
     finally { setHistoryLoading(false); }
   }
   function clearCustomer() { setSelectedCustomer(null); setCustomerSearch(""); setCustomerHistory(null); clearDiscount(); }
+
+  useEffect(() => {
+    if (isNewCustomer) {
+      clearCustomer();
+    }
+  }, [isNewCustomer]);
 
   // Cart
   const [cart, setCart] = useState([]);
@@ -111,9 +121,11 @@ export default function SalesPage() {
   const finalTotal = Math.max(0, subtotal - discountAmt);
 
   const suggestion = useMemo(() => {
-    if (!selectedCustomer || !customerHistory) return null;
-    return getSmartDiscount({ purchaseCount: customerHistory.purchaseCount, totalSpent: customerHistory.totalSpent, currentSubtotal: subtotal });
-  }, [selectedCustomer, customerHistory, subtotal]);
+    if ((!selectedCustomer && !isNewCustomer) || (selectedCustomer && !customerHistory)) return null;
+    const pCount = isNewCustomer ? 0 : (customerHistory?.purchaseCount || 0);
+    const tSpent = isNewCustomer ? 0 : (customerHistory?.totalSpent || 0);
+    return getSmartDiscount({ purchaseCount: pCount, totalSpent: tSpent, currentSubtotal: subtotal });
+  }, [selectedCustomer, customerHistory, subtotal, isNewCustomer]);
 
   // Submit
   const [msg, setMsg] = useState(""); const [msgType, setMsgType] = useState("neutral");
@@ -123,27 +135,46 @@ export default function SalesPage() {
   async function handleSubmit(e) {
     e.preventDefault(); setMsg(""); setMsgType("neutral");
     if (cart.length === 0) { setMsg("Cart is empty. Add at least one item."); setMsgType("error"); return; }
+    
+    if (isNewCustomer && !newCustomerName.trim()) {
+      setMsg("Please enter the new customer's name."); setMsgType("error"); return;
+    }
+
     setLoading(true);
     try {
+      let finalCustomerId = selectedCustomer?.id || null;
+      let finalCustomerName = selectedCustomer?.name || "Walk-in Customer";
+      let finalCustomerPhone = selectedCustomer?.phone || "";
+      let finalCustomerEmail = selectedCustomer?.email || "";
+      let finalCustomerCompany = selectedCustomer?.company || "";
+
+      if (isNewCustomer && newCustomerName.trim()) {
+        const newId = await createCustomer({ name: newCustomerName, phone: newCustomerPhone }, user);
+        finalCustomerId = newId;
+        finalCustomerName = newCustomerName.trim();
+        finalCustomerPhone = newCustomerPhone.trim();
+      }
+
       const result = await createSale({
         cartItems: cart, soldBy: user.uid, soldByEmail: user.email,
-        customerId: selectedCustomer?.id || null, customerName: selectedCustomer?.name || "Walk-in Customer",
-        customerEmail: selectedCustomer?.email || "", customerPhone: selectedCustomer?.phone || "",
-        customerCompany: selectedCustomer?.company || "",
+        customerId: finalCustomerId, customerName: finalCustomerName,
+        customerEmail: finalCustomerEmail, customerPhone: finalCustomerPhone,
+        customerCompany: finalCustomerCompany,
         discountPercent: safeDiscPct, discountAmount: discountAmt, discountSource, discountReason,
-        customerPurchaseCountAtSale: customerHistory?.purchaseCount || 0,
-        customerTotalSpentBeforeSale: customerHistory?.totalSpent || 0,
+        customerPurchaseCountAtSale: isNewCustomer ? 0 : (customerHistory?.purchaseCount || 0),
+        customerTotalSpentBeforeSale: isNewCustomer ? 0 : (customerHistory?.totalSpent || 0),
       });
       setLastSale({
         id: result.invoiceNumber, invoiceNumber: result.invoiceNumber,
         items: cart, subtotal, discountPercent: safeDiscPct, discountAmount: discountAmt,
         finalTotal, totalPrice: finalTotal, soldByEmail: user.email, soldAt: new Date(),
-        customerId: selectedCustomer?.id || null, customerName: selectedCustomer?.name || "Walk-in Customer",
-        customerEmail: selectedCustomer?.email || "", customerPhone: selectedCustomer?.phone || "",
-        customerCompany: selectedCustomer?.company || "",
+        customerId: finalCustomerId, customerName: finalCustomerName,
+        customerEmail: finalCustomerEmail, customerPhone: finalCustomerPhone,
+        customerCompany: finalCustomerCompany,
       });
       setMsg(`✅ Sale saved — ${result.invoiceNumber}`); setMsgType("success");
       setCart([]); setSelItemId(""); setSelQty(1); clearDiscount(); clearCustomer();
+      setNewCustomerName(""); setNewCustomerPhone(""); setIsNewCustomer(false);
       setShowInvoice(true);
     } catch (err) { setMsg(err?.message || "Failed to save sale."); setMsgType("error"); }
     finally { setLoading(false); }
@@ -168,7 +199,15 @@ export default function SalesPage() {
 
             {/* Customer */}
             <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
-              <div className="text-xs font-semibold uppercase tracking-widest text-white/50 mb-3">Customer (optional)</div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs font-semibold uppercase tracking-widest text-white/50">Customer (optional)</div>
+                {!selectedCustomer && (
+                  <button type="button" onClick={() => { setIsNewCustomer(!isNewCustomer); setCustomerSearch(""); }} className="text-xs text-indigo-400 hover:text-indigo-300 transition font-medium">
+                    {isNewCustomer ? "Search Existing" : "+ New Customer"}
+                  </button>
+                )}
+              </div>
+              
               {selectedCustomer ? (
                 <div className="rounded-xl bg-indigo-500/10 ring-1 ring-indigo-500/20 p-3 flex items-start justify-between gap-3">
                   <div className="text-sm">
@@ -179,6 +218,11 @@ export default function SalesPage() {
                     </div>
                   </div>
                   <button type="button" onClick={clearCustomer} className="rounded-lg bg-white/5 ring-1 ring-white/15 px-2.5 py-1 text-xs font-semibold text-white/70 hover:bg-white/10 transition shrink-0">Clear</button>
+                </div>
+              ) : isNewCustomer ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="Customer Name *" required={isNewCustomer} />
+                  <Input value={newCustomerPhone} onChange={e => setNewCustomerPhone(e.target.value)} placeholder="Phone Number" />
                 </div>
               ) : (
                 <div className="relative">
@@ -193,7 +237,7 @@ export default function SalesPage() {
                       ))}
                     </div>
                   )}
-                  <div className="mt-1 text-xs text-white/30 px-1">Leave empty for Walk-in Customer.</div>
+                  <div className="mt-2 text-xs text-white/40 px-1">Leave empty for a generic Walk-in Customer bill.</div>
                 </div>
               )}
             </div>
@@ -275,12 +319,12 @@ export default function SalesPage() {
             <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4 space-y-4">
               <div className="text-xs font-semibold uppercase tracking-widest text-white/50">Customer Discount</div>
 
-              {!selectedCustomer && !cart.length && (
+              {!selectedCustomer && !isNewCustomer && !cart.length && (
                 <p className="text-xs text-white/40 italic">Add items and select a customer to see discount suggestions.</p>
               )}
 
               {/* Smart suggestion */}
-              {suggestion && !historyLoading && (() => {
+              {suggestion && !historyLoading && cart.length > 0 && (() => {
                 const { eligibleNow, suggestedDiscountPercent, discountName, reason, saleNeededFor100k,
                   previousPurchaseCount, previousTotalSpent, projectedTotalAfterSale,
                   saleIsHighVal, saleIsPremium, loyaltyProgress } = suggestion;
@@ -288,30 +332,28 @@ export default function SalesPage() {
                 return (
                   <div className="space-y-3">
                     {/* Stats */}
-                    {cart.length > 0 && (
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        {selectedCustomer && <>
-                          <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
-                            <div className="text-white/40 mb-0.5">Prev Purchases</div>
-                            <div className="font-semibold text-white">{previousPurchaseCount}</div>
-                          </div>
-                          <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
-                            <div className="text-white/40 mb-0.5">Prev Spent</div>
-                            <div className="font-semibold text-white">{fc(previousTotalSpent)}</div>
-                          </div>
-                        </>}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {(selectedCustomer || isNewCustomer) && <>
                         <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
-                          <div className="text-white/40 mb-0.5">Bill Subtotal</div>
-                          <div className="font-semibold text-amber-300">{fc(subtotal)}</div>
+                          <div className="text-white/40 mb-0.5">Prev Purchases</div>
+                          <div className="font-semibold text-white">{previousPurchaseCount}</div>
                         </div>
-                        {selectedCustomer && (
-                          <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
-                            <div className="text-white/40 mb-0.5">Projected Lifetime</div>
-                            <div className="font-semibold text-blue-300">{fc(projectedTotalAfterSale)}</div>
-                          </div>
-                        )}
+                        <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
+                          <div className="text-white/40 mb-0.5">Prev Spent</div>
+                          <div className="font-semibold text-white">{fc(previousTotalSpent)}</div>
+                        </div>
+                      </>}
+                      <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
+                        <div className="text-white/40 mb-0.5">Bill Subtotal</div>
+                        <div className="font-semibold text-amber-300">{fc(subtotal)}</div>
                       </div>
-                    )}
+                      {(selectedCustomer || isNewCustomer) && (
+                        <div className="rounded-lg bg-white/5 ring-1 ring-white/10 p-2.5">
+                          <div className="text-white/40 mb-0.5">Projected Lifetime</div>
+                          <div className="font-semibold text-blue-300">{fc(projectedTotalAfterSale)}</div>
+                        </div>
+                      )}
+                    </div>
 
                     {/* Eligible now */}
                     {eligibleNow && (
@@ -334,7 +376,7 @@ export default function SalesPage() {
                     )}
 
                     {/* Not eligible */}
-                    {!eligibleNow && cart.length > 0 && (
+                    {!eligibleNow && (
                       <div className="rounded-xl bg-white/[0.03] ring-1 ring-white/10 p-3 text-xs text-white/50 space-y-1">
                         <div className="text-white/60 font-medium">No spending discount for this bill.</div>
                         {saleNeededFor100k > 0 && <div>{fc(saleNeededFor100k)} more in this bill unlocks 5% High Value Discount.</div>}
@@ -343,38 +385,36 @@ export default function SalesPage() {
                     )}
 
                     {/* Milestone bars */}
-                    {cart.length > 0 && (
-                      <div className="rounded-xl bg-white/[0.03] ring-1 ring-white/10 p-3 space-y-2.5 text-xs">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-white/30">Bill Spending Milestones</div>
-                        {[{ label: `${fc(100_000)} High Value (5%)`, val: subtotal, max: 100_000, reached: saleIsHighVal, color: "bg-amber-500" },
-                          { label: `${fc(250_000)} Premium (10%)`, val: subtotal, max: 250_000, reached: saleIsPremium, color: "bg-purple-500" }
-                        ].map(({ label, val, max, reached, color }) => (
-                          <div key={label}>
-                            <div className="flex justify-between mb-1">
-                              <span className={reached ? "text-emerald-300 font-semibold" : "text-white/50"}>{reached ? "✓" : "○"} {label}</span>
-                              {!reached && <span className="text-white/30">{fc(Math.max(0, max - val))} left</span>}
-                            </div>
-                            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                              <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${Math.min(100, Math.round((val / max) * 100))}%` }} />
-                            </div>
+                    <div className="rounded-xl bg-white/[0.03] ring-1 ring-white/10 p-3 space-y-2.5 text-xs">
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-white/30">Bill Spending Milestones</div>
+                      {[{ label: `${fc(100_000)} High Value (5%)`, val: subtotal, max: 100_000, reached: saleIsHighVal, color: "bg-amber-500" },
+                        { label: `${fc(250_000)} Premium (10%)`, val: subtotal, max: 250_000, reached: saleIsPremium, color: "bg-purple-500" }
+                      ].map(({ label, val, max, reached, color }) => (
+                        <div key={label}>
+                          <div className="flex justify-between mb-1">
+                            <span className={reached ? "text-emerald-300 font-semibold" : "text-white/50"}>{reached ? "✓" : "○"} {label}</span>
+                            {!reached && <span className="text-white/30">{fc(Math.max(0, max - val))} left</span>}
                           </div>
-                        ))}
-                        {loyaltyProgress && (
-                          <div>
-                            <div className="flex justify-between mb-1">
-                              <span className={loyaltyProgress.reached ? "text-emerald-300 font-semibold" : "text-white/50"}>{loyaltyProgress.reached ? "✓" : "○"} 5 Purchases — Loyalty (5%)</span>
-                              <span className="text-white/30">{previousPurchaseCount}/5</span>
-                            </div>
-                            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                              <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${Math.min(100, (previousPurchaseCount / 5) * 100)}%` }} />
-                            </div>
-                            {!loyaltyProgress.reached && loyaltyProgress.willReachAfterSale && (
-                              <div className="text-blue-300 mt-1">After this sale: loyalty milestone reached for future purchases.</div>
-                            )}
+                          <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                            <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${Math.min(100, Math.round((val / max) * 100))}%` }} />
                           </div>
-                        )}
-                      </div>
-                    )}
+                        </div>
+                      ))}
+                      {loyaltyProgress && (
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <span className={loyaltyProgress.reached ? "text-emerald-300 font-semibold" : "text-white/50"}>{loyaltyProgress.reached ? "✓" : "○"} 5 Purchases — Loyalty (5%)</span>
+                            <span className="text-white/30">{previousPurchaseCount}/5</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                            <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${Math.min(100, (previousPurchaseCount / 5) * 100)}%` }} />
+                          </div>
+                          {!loyaltyProgress.reached && loyaltyProgress.willReachAfterSale && (
+                            <div className="text-blue-300 mt-1">After this sale: loyalty milestone reached for future purchases.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })()}

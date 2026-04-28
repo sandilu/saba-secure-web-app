@@ -42,17 +42,22 @@ export function getSmartDiscount({ purchaseCount, totalSpent, currentSubtotal = 
   let reason                   = "";
   let eligibleNow              = false;
 
+  // 1. Highest tier: 10% Premium (current sale ONLY)
   if (saleIsPremium) {
     suggestedDiscountPercent = 10;
     discountName = "Premium Customer Discount";
-    reason = `This sale subtotal is ${fmtRs(curSub)}, which exceeds the Rs. 250,000 premium threshold.`;
+    reason = `This sale subtotal is ${fmtRs(curSub)}, crossing the Rs. 250k premium threshold.`;
     eligibleNow = true;
-  } else if (saleIsHighVal) {
+  }
+  // 2. Middle tier: 5% High Value (current sale ONLY)
+  else if (saleIsHighVal) {
     suggestedDiscountPercent = 5;
     discountName = "High Value Discount";
-    reason = `This sale subtotal is ${fmtRs(curSub)}, which exceeds the Rs. 100,000 high-value threshold.`;
+    reason = `This sale subtotal is ${fmtRs(curSub)}, crossing the Rs. 100k high-value threshold.`;
     eligibleNow = true;
-  } else if (isLoyal) {
+  }
+  // 3. Middle tier alternative: 5% Loyalty (purchases count)
+  else if (isLoyal) {
     suggestedDiscountPercent = 5;
     discountName = "Loyalty Discount";
     reason = `Customer has completed ${prevCount} previous purchases (loyalty milestone: 5+ purchases).`;

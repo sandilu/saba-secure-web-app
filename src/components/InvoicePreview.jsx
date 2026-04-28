@@ -82,7 +82,18 @@ export default function InvoicePreview({ sale, onClose }) {
           </div>
 
           {/* Printable body */}
-          <div ref={invoiceRef} className="bg-white p-10" style={{ fontFamily: "'Segoe UI',system-ui,Arial,sans-serif" }}>
+          <div ref={invoiceRef} className="bg-white p-10 relative overflow-hidden" style={{ fontFamily: "'Segoe UI',system-ui,Arial,sans-serif" }}>
+            
+            {sale.status === "cancelled" && (
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%) rotate(-30deg)", fontSize: "100px", fontWeight: "900", color: "rgba(239, 68, 68, 0.1)", zIndex: 0, pointerEvents: "none", whiteSpace: "nowrap" }}>
+                CANCELLED
+              </div>
+            )}
+            {(sale.status === "returned" || sale.status === "partially_returned") && (
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%) rotate(-30deg)", fontSize: "80px", fontWeight: "900", color: "rgba(245, 158, 11, 0.1)", zIndex: 0, pointerEvents: "none", whiteSpace: "nowrap" }}>
+                {sale.status === "returned" ? "FULLY RETURNED" : "PARTIALLY RETURNED"}
+              </div>
+            )}
 
             {/* Header */}
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28 }}>
@@ -141,7 +152,25 @@ export default function InvoicePreview({ sale, onClose }) {
             </table>
 
             {/* Totals */}
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 36 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 36, position: "relative", zIndex: 10 }}>
+              <div style={{ width: 320 }}>
+                {/* Returns summary if any */}
+                {sale.returnedItems && sale.returnedItems.length > 0 && (
+                  <div style={{ marginBottom: 16, padding: "12px", background: "#fffbeb", borderRadius: "8px", border: "1px solid #fde68a" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", marginBottom: 6, textTransform: "uppercase" }}>Returned Items Summary</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <tbody>
+                        {sale.returnedItems.map((ri, idx) => (
+                          <tr key={idx}>
+                            <td style={{ padding: "2px 0", fontSize: 12, color: "#92400e" }}>{ri.itemName}</td>
+                            <td style={{ padding: "2px 0", fontSize: 12, color: "#92400e", textAlign: "right", fontWeight: 600 }}>Qty: {ri.returnedQty}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
               <div style={{ width: 280 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13, color: "#64748b" }}>
                   <span>Subtotal</span><span>{fc(subtotal)}</span>
@@ -151,8 +180,19 @@ export default function InvoicePreview({ sale, onClose }) {
                   <span>{discPct > 0 ? `− ${fc(discAmt)}` : "—"}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", borderTop: "2px solid #e2e8f0", paddingTop: 10, marginTop: 4, fontSize: 16, fontWeight: 800, color: "#0f172a" }}>
-                  <span>Total</span><span style={{ color: "#16a34a" }}>{fc(finalTotal)}</span>
+                  <span>{sale.status === "partially_returned" || sale.status === "returned" ? "Original Total" : "Total"}</span>
+                  <span style={{ color: sale.status === "cancelled" ? "#ef4444" : "#16a34a", textDecoration: sale.status === "cancelled" ? "line-through" : "none" }}>{fc(finalTotal)}</span>
                 </div>
+                {(sale.status === "returned" || sale.status === "partially_returned") && (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13, color: "#ef4444", marginTop: 4 }}>
+                      <span>Refund Amount</span><span>− {fc(sale.refundAmount)}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", borderTop: "2px solid #e2e8f0", paddingTop: 10, marginTop: 4, fontSize: 16, fontWeight: 800, color: "#0f172a" }}>
+                      <span>Final Total</span><span style={{ color: "#16a34a" }}>{fc(sale.finalTotalAfterReturn)}</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 

@@ -44,8 +44,10 @@ import {
   deleteInventoryItem,
 } from "../firebase/inventoryActions";
 import { getSales } from "../firebase/salesActions";
+import { getSaleItems, getSaleTotal, getSaleQuantity, getSaleItemSummary } from "../utils/saleHelpers";
 import { listenNotifications } from "../firebase/notificationActions";
 import { listenSuppliers } from "../firebase/supplierActions";
+import { listenCustomers } from "../firebase/customerActions";
 import BulkImportModal from "../components/BulkImportModal";
 
 const initialForm = {
@@ -178,6 +180,15 @@ export default function AdminDashboard() {
   const [suppliers, setSuppliers] = useState([]);
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [supplierSearch, setSupplierSearch] = useState("");
+
+  const [customers, setCustomers] = useState([]);
+
+  useEffect(() => {
+    return listenCustomers(
+      (data) => setCustomers(data),
+      (err)  => console.error("Failed to load customers:", err)
+    );
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -359,49 +370,83 @@ export default function AdminDashboard() {
   }, [items]);
 
   const salesAnalytics = useMemo(() => {
-    const totalSalesCount = sales.length;
-    const totalRevenue = sales.reduce(
-      (sum, sale) => sum + Number(sale.totalPrice || 0),
-      0
-    );
-    const totalUnitsSold = sales.reduce(
-      (sum, sale) => sum + Number(sale.quantitySold || 0),
-      0
-    );
-
+    let totalSalesCount = 0;
+    let totalRevenue = 0;
+    let totalUnitsSold = 0;
     let totalProfit = 0;
+    const salesByItem = {};
+    const recentSales = [];
 
-    const salesByItem = sales.reduce((acc, sale) => {
-      const key = sale.itemId || sale.sku || sale.itemName || "unknown";
+    for (const sale of sales) {
+      const status = sale.status || "completed";
+      
+      if (recentSales.length < 5) recentSales.push(sale); // Add to recents BEFORE filtering cancelled
+      
+      if (status === "cancelled") continue; // Exclude entirely from stats
 
-      // Calculate profit by joining with current inventory items
-      const matchedItem = items.find(i => i.id === sale.itemId);
-      // Fallback: assume 0 buying price if item is totally missing
-      const buyingPrice = matchedItem ? Number(matchedItem.buyingPrice || 0) : 0;
-      const unitProfit = Number(sale.unitPrice || 0) - buyingPrice;
-      const saleProfit = unitProfit * Number(sale.quantitySold || 0);
+      totalSalesCount++;
+      const saleTotal = getSaleTotal(sale);
+      const refundAmt = Number(sale.refundAmount || 0);
+      const revenue = saleTotal - refundAmt;
+      
+      totalRevenue += revenue;
 
-      totalProfit += saleProfit;
+      const itemsInSale = getSaleItems(sale);
+      let saleProfit = 0;
+      let effectiveQtyTotal = 0;
+      
+      for (const item of itemsInSale) {
+        const soldQty = Number(item.quantitySold || 0);
+        const retQty = Number((sale.returnedItems || []).find(r => r.itemId === item.itemId)?.returnedQty || 0);
+        const effectiveQty = soldQty - retQty;
+        
+        if (effectiveQty <= 0) continue;
 
-      if (!acc[key]) {
-        acc[key] = {
-          itemId: sale.itemId || "",
-          itemName: sale.itemName || "Unknown Item",
-          sku: sale.sku || "-",
-          totalUnits: 0,
-          totalRevenue: 0,
-          totalProfit: 0,
-          transactions: 0,
-        };
+        totalUnitsSold += effectiveQty;
+        effectiveQtyTotal += effectiveQty;
+
+        const key = item.itemId || item.sku || item.itemName || "unknown";
+        
+        // Calculate item profit
+        let itemProfitPerUnit = 0;
+        if (item.lineProfit && soldQty > 0) {
+           itemProfitPerUnit = Number(item.lineProfit) / soldQty;
+        } else {
+           const matchedItem = items.find(i => i.id === item.itemId);
+           const buyingPrice = matchedItem ? Number(matchedItem.buyingPrice || 0) : 0;
+           itemProfitPerUnit = Number(item.unitPrice || 0) - buyingPrice;
+        }
+        
+        const thisItemProfit = itemProfitPerUnit * effectiveQty;
+        saleProfit += thisItemProfit;
+
+        if (!salesByItem[key]) {
+          salesByItem[key] = {
+            itemId: item.itemId || "",
+            itemName: item.itemName || "Unknown Item",
+            sku: item.sku || "-",
+            totalUnits: 0,
+            totalRevenue: 0,
+            totalProfit: 0,
+            transactions: 0,
+          };
+        }
+
+        salesByItem[key].totalUnits += effectiveQty;
+        salesByItem[key].totalRevenue += (Number(item.unitPrice || 0) * effectiveQty); // Gross estimate
+        salesByItem[key].totalProfit += thisItemProfit;
+        salesByItem[key].transactions += 1;
       }
-
-      acc[key].totalUnits += Number(sale.quantitySold || 0);
-      acc[key].totalRevenue += Number(sale.totalPrice || 0);
-      acc[key].totalProfit += saleProfit;
-      acc[key].transactions += 1;
-
-      return acc;
-    }, {});
+      
+      // Proportionate discount reduction on profit
+      const totalEffectiveSubtotal = itemsInSale.reduce((acc, item) => {
+         const sq = Number(item.quantitySold || 0);
+         const rq = Number((sale.returnedItems || []).find(r => r.itemId === item.itemId)?.returnedQty || 0);
+         return acc + ((sq - rq) * Number(item.unitPrice || 0));
+      }, 0);
+      const effectiveDiscount = totalEffectiveSubtotal * (Number(sale.discountPercent || 0) / 100);
+      totalProfit += (saleProfit - effectiveDiscount);
+    }
 
     const topSellingItems = Object.values(salesByItem)
       .sort((a, b) => b.totalUnits - a.totalUnits)
@@ -410,8 +455,6 @@ export default function AdminDashboard() {
     const topProfitableItems = Object.values(salesByItem)
       .sort((a, b) => b.totalProfit - a.totalProfit)
       .slice(0, 5);
-
-    const recentSales = [...sales].slice(0, 5);
 
     return {
       totalSalesCount,
@@ -434,6 +477,9 @@ export default function AdminDashboard() {
     }));
 
     const revenueByDateMap = sales.reduce((acc, sale) => {
+      const status = sale.status || "completed";
+      if (status === "cancelled") return acc;
+
       const rawDate =
         typeof sale.soldAt?.toDate === "function"
           ? sale.soldAt.toDate()
@@ -450,7 +496,7 @@ export default function AdminDashboard() {
           revenue: 0,
         };
       }
-      acc[key].revenue += Number(sale.totalPrice || 0);
+      acc[key].revenue += (getSaleTotal(sale) - Number(sale.refundAmount || 0));
       return acc;
     }, {});
 
@@ -462,11 +508,60 @@ export default function AdminDashboard() {
         revenue: entry.revenue,
       }));
 
+    const profitByItemChart = salesAnalytics.topProfitableItems.map((item) => ({
+      name: truncateLabel(item.itemName, 14),
+      profit: item.totalProfit,
+      fullName: item.itemName,
+    }));
+
     return {
       salesByItemChart,
       revenueTrend,
+      profitByItemChart,
     };
-  }, [sales, salesAnalytics.topSellingItems]);
+  }, [sales, salesAnalytics.topSellingItems, salesAnalytics.topProfitableItems]);
+
+  const discountUsagePieData = useMemo(() => {
+    let none = 0, loyalty = 0, highValue = 0, premium = 0, other = 0;
+    sales.forEach(s => {
+      const src = s.discountSource || "";
+      if (!s.discountApplied) none++;
+      else if (src.includes("Loyalty")) loyalty++;
+      else if (src.includes("High Value")) highValue++;
+      else if (src.includes("Premium")) premium++;
+      else other++;
+    });
+    return [
+      { name: "No Discount", value: none },
+      { name: "Loyalty (5%)", value: loyalty },
+      { name: "High Value (5%)", value: highValue },
+      { name: "Premium (10%)", value: premium },
+      { name: "Manual/Other", value: other },
+    ].filter(d => d.value > 0);
+  }, [sales]);
+
+  const customerValuePieData = useMemo(() => {
+    let regular = 0, highValue = 0, premium = 0;
+    const cidMap = {};
+    sales.forEach(s => {
+      if (!s.customerId) return;
+      if (!cidMap[s.customerId]) cidMap[s.customerId] = 0;
+      cidMap[s.customerId] += Number(s.totalPrice || 0);
+    });
+
+    customers.forEach(c => {
+      const spent = cidMap[c.id] || 0;
+      if (spent >= 250000) premium++;
+      else if (spent >= 100000) highValue++;
+      else regular++;
+    });
+
+    return [
+      { name: "Premium (250k+)", value: premium },
+      { name: "High Value (100k+)", value: highValue },
+      { name: "Regular (<100k)", value: regular },
+    ].filter(d => d.value > 0);
+  }, [sales, customers]);
 
   const lowStockPieData = useMemo(() => {
     return [
@@ -546,6 +641,25 @@ export default function AdminDashboard() {
       });
     }
 
+    let highValueCustCount = 0;
+    const cidMap = {};
+    sales.forEach(s => {
+      if (!s.customerId) return;
+      if (!cidMap[s.customerId]) cidMap[s.customerId] = 0;
+      cidMap[s.customerId] += Number(s.totalPrice || 0);
+    });
+    customers.forEach(c => {
+      if ((cidMap[c.id] || 0) >= 100000) highValueCustCount++;
+    });
+
+    if (highValueCustCount > 0) {
+      insights.push({
+        type: "success",
+        title: "High-value customers growing",
+        text: `You have ${highValueCustCount} customer(s) who have spent over Rs. 100,000. Consider direct outreach or exclusive offers.`,
+      });
+    }
+
     if (lowStockItems.length > 0) {
       lowStockItems.slice(0, 5).forEach((item) => {
         const soldEntry = salesBySku[item.sku];
@@ -562,6 +676,15 @@ export default function AdminDashboard() {
           text: `Current stock is ${item.quantity}. Recommended reorder quantity: ${reorderQty} units to reduce stock-out risk.`,
         });
       });
+
+      const lowStockSuppliers = new Set(lowStockItems.map(i => i.supplierName || i.supplierId).filter(Boolean));
+      if (lowStockSuppliers.size > 0) {
+        recommendations.push({
+          priority: "High",
+          title: "Supplier Reorder Needed",
+          text: `You have low stock items tied to ${lowStockSuppliers.size} supplier(s). Contact them soon for bulk replenishment.`,
+        });
+      }
     }
 
     if (topSeller) {
@@ -1007,6 +1130,19 @@ export default function AdminDashboard() {
           />
         </div>
 
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Card title={`${customers.length} customers`} desc="Registered customer accounts" />
+          <Card title={`${suppliers.length} suppliers`} desc="Registered supplier contacts" />
+          <Card
+            title={`${notifications.filter(n => !n.isRead).length} unread`}
+            desc="Active unread notifications"
+          />
+          <Card
+            title={`${docsList.filter(d => d.status === "pending").length} pending`}
+            desc="Documents awaiting approval"
+          />
+        </div>
+
         <div className="grid gap-6 xl:grid-cols-3">
           <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
             <SectionTitle
@@ -1151,6 +1287,131 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        <div className="grid gap-6 xl:grid-cols-3">
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Visual Analytics"
+              title="Profit by Item"
+              pill="Bar Chart"
+            />
+            <p className="mt-2 text-xs leading-5 text-white/55">
+              Displays the highest-profit products.
+            </p>
+            <div className="mt-4 h-72">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading chart...
+                </div>
+              ) : chartData.profitByItemChart.length === 0 ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  No profit data available for chart.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartData.profitByItemChart}
+                    margin={{ top: 10, right: 10, left: -10, bottom: 10 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis dataKey="name" stroke="#cbd5e1" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#cbd5e1" tick={{ fontSize: 12 }} allowDecimals={false} tickFormatter={(val) => `Rs. ${val/1000}k`} />
+                    <Tooltip content={<CustomBarTooltip />} />
+                    <Bar dataKey="profit" fill="#10b981" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Visual Analytics"
+              title="Customer Value Breakdown"
+              pill="Pie Chart"
+            />
+            <p className="mt-2 text-xs leading-5 text-white/55">
+              Distribution of customers across value tiers.
+            </p>
+            <div className="mt-4 h-72">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading chart...
+                </div>
+              ) : customerValuePieData.length === 0 ? (
+                <div className="flex h-full items-center justify-center rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-center text-sm text-white/70">
+                  No customer data available yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={customerValuePieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={90}
+                      dataKey="value"
+                      paddingAngle={3}
+                    >
+                      {customerValuePieData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${entry.name}`}
+                          fill={["#fbbf24", "#38bdf8", "#a8a29e"][index % 3]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomPieTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+            <SectionTitle
+              eyebrow="Visual Analytics"
+              title="Discount Usage Summary"
+              pill="Pie Chart"
+            />
+            <p className="mt-2 text-xs leading-5 text-white/55">
+              Breakdown of discounts applied to sales.
+            </p>
+            <div className="mt-4 h-72">
+              {salesLoading ? (
+                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
+                  Loading chart...
+                </div>
+              ) : discountUsagePieData.length === 0 ? (
+                <div className="flex h-full items-center justify-center rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-center text-sm text-white/70">
+                  No discount usage data yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={discountUsagePieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={90}
+                      dataKey="value"
+                      paddingAngle={3}
+                    >
+                      {discountUsagePieData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${entry.name}`}
+                          fill={["#94a3b8", "#a78bfa", "#f472b6", "#fb923c", "#34d399"][index % 5]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomPieTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="grid gap-6 xl:grid-cols-2">
           <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
             <SectionTitle
@@ -1218,36 +1479,47 @@ export default function AdminDashboard() {
                   No recent sales found.
                 </div>
               ) : (
-                salesAnalytics.recentSales.map((sale) => (
-                  <div
-                    key={sale.id}
-                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="font-semibold text-white break-words">
-                          {sale.itemName}
+                salesAnalytics.recentSales.map((sale) => {
+                  const status = sale.status || "completed";
+                  const isCancelled = status === "cancelled";
+                  const isReturned = status === "returned";
+                  const isPartial = status === "partially_returned";
+                  return (
+                    <div
+                      key={sale.id}
+                      className={`rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 ${isCancelled ? "opacity-60" : ""}`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-white truncate">
+                            {getSaleItemSummary(sale) || "Unknown Item"}
+                          </div>
+                          <div className="text-xs text-white/60">Inv: {sale.invoiceNumber}</div>
+                          <div className="mt-1 flex items-center gap-2">
+                            {isCancelled ? <span className="inline-block px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 text-[9px] font-bold uppercase tracking-wider">Cancelled</span> :
+                             isReturned ? <span className="inline-block px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">Returned</span> :
+                             isPartial ? <span className="inline-block px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold uppercase tracking-wider">Partial Ret</span> : null}
+                            <div className="text-xs text-white/50 break-all">
+                              Sold by {sale.soldByEmail || "-"}
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-xs text-white/60">SKU: {sale.sku}</div>
-                        <div className="mt-1 text-xs text-white/50 break-all">
-                          Sold by {sale.soldByEmail || "-"}
-                        </div>
-                      </div>
 
-                      <div className="text-right shrink-0">
-                        <div className="text-sm font-semibold text-white">
-                          {sale.quantitySold} unit(s)
-                        </div>
-                        <div className="text-xs text-white/60">
-                          {formatCurrency(sale.totalPrice)}
-                        </div>
-                        <div className="mt-1 text-xs text-white/50">
-                          {formatDate(sale.soldAt)}
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-semibold text-white">
+                            {getSaleQuantity(sale)} unit(s)
+                          </div>
+                          <div className="text-xs text-white/60">
+                            {isCancelled ? <span className="line-through">{formatCurrency(getSaleTotal(sale))}</span> : formatCurrency(sale.finalTotalAfterReturn ?? getSaleTotal(sale))}
+                          </div>
+                          <div className="mt-1 text-xs text-white/50">
+                            {formatDate(sale.soldAt)}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

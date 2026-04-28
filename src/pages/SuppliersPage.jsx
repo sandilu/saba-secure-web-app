@@ -1,6 +1,6 @@
 // src/pages/SuppliersPage.jsx — Updated with Reorder Items view
 import { useEffect, useMemo, useState } from "react";
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query, getDocs } from "firebase/firestore";
 import {
   listenSuppliers, createSupplier, updateSupplier, deleteSupplier,
 } from "../firebase/supplierActions";
@@ -199,8 +199,13 @@ export default function SuppliersPage() {
   const [form, setForm]           = useState(initialForm);
   const [confirmModal, setConfirmModal] = useState(null);
   const [reorderSupplier, setReorderSupplier] = useState(null);
+  const [inventory, setInventory] = useState([]);
 
   useEffect(() => {
+    getDocs(collection(db, "inventoryItems")).then(snap => {
+      setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }).catch(console.error);
+
     return listenSuppliers(
       (data) => { setSuppliers(data); setLoading(false); },
       (err)  => { console.error(err); setMsg("Failed to load suppliers."); setLoading(false); }
@@ -218,6 +223,74 @@ export default function SuppliersPage() {
       (c.category      || "").toLowerCase().includes(s)
     );
   }, [suppliers, search]);
+
+  const supplierStats = useMemo(() => {
+    let lowStockSuppliers = new Set();
+    let reorderNeededItems = 0;
+    let estimatedReorderCost = 0;
+
+    for (const item of inventory) {
+        const qty = Number(item.quantity || 0);
+        const min = Number(item.minStockLevel || 0);
+        if (qty <= min) {
+            reorderNeededItems++;
+            if (item.supplierId) lowStockSuppliers.add(item.supplierId);
+            else if (item.supplierName) lowStockSuppliers.add(item.supplierName.toLowerCase());
+            
+            const reorder = Math.max(min * 2 - qty, min);
+            const cost = Number(item.buyingPrice || 0);
+            estimatedReorderCost += reorder * cost;
+        }
+    }
+
+    return {
+        totalSuppliers: suppliers.length,
+        suppliersWithLowStock: lowStockSuppliers.size,
+        reorderNeededItems,
+        estimatedReorderCost,
+    };
+  }, [inventory, suppliers]);
+
+  const exportSupplierReorderCsv = () => {
+    const rows = [
+      ["Supplier", "Contact Person", "Email", "Phone", "Item", "SKU", "Current Qty", "Min Stock", "Suggested Reorder", "Buying Price", "Estimated Reorder Cost", "Status"]
+    ];
+
+    for (const item of inventory) {
+        const qty = Number(item.quantity || 0);
+        const min = Number(item.minStockLevel || 0);
+        if (qty <= min) {
+            let sName = item.supplierName || "—";
+            let sContact = "—", sEmail = "—", sPhone = "—";
+            if (item.supplierId) {
+                const s = suppliers.find(sup => sup.id === item.supplierId);
+                if (s) {
+                    sName = s.name;
+                    sContact = s.contactPerson || "—";
+                    sEmail = s.email || "—";
+                    sPhone = s.phone || "—";
+                }
+            }
+
+            const reorder = Math.max(min * 2 - qty, min);
+            const buying = Number(item.buyingPrice || 0);
+            const estCost = reorder * buying;
+            const status = qty <= 0 ? "Out of Stock" : "Low Stock";
+
+            rows.push([
+                sName, sContact, sEmail, sPhone,
+                item.itemName, item.sku || "—", qty, min, reorder, buying, estCost, status
+            ]);
+        }
+    }
+
+    const csvContent = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "supplier_reorder_intelligence.csv";
+    link.click();
+  };
 
   function resetForm() { setForm(initialForm); setMode("add"); setEditingId(null); setMsg(""); }
 
@@ -267,13 +340,35 @@ export default function SuppliersPage() {
 
       <PageShell>
         <div className="grid gap-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
             <div>
               <Pill>Supplier Management</Pill>
               <h1 className="mt-3 text-2xl sm:text-3xl font-semibold text-white">Supplier Database</h1>
               <p className="mt-2 text-sm text-white/70">
                 Manage your suppliers for inventory intelligence and reordering.
               </p>
+            </div>
+            <SecondaryButton onClick={exportSupplierReorderCsv}>
+              Export Supplier Reorder CSV
+            </SecondaryButton>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-white/50 mb-1">Total Suppliers</div>
+              <div className="text-xl font-semibold text-white">{supplierStats.totalSuppliers}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-amber-300/80 mb-1">Suppliers w/ Low Stock</div>
+              <div className="text-xl font-semibold text-white">{supplierStats.suppliersWithLowStock}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-orange-300/80 mb-1">Items Need Reorder</div>
+              <div className="text-xl font-semibold text-white">{supplierStats.reorderNeededItems}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-white/50 mb-1">Est. Reorder Cost</div>
+              <div className="text-xl font-semibold text-emerald-300">Rs. {supplierStats.estimatedReorderCost.toLocaleString()}</div>
             </div>
           </div>
 

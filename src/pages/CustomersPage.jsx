@@ -4,6 +4,7 @@ import {
   listenCustomers, createCustomer, updateCustomer,
   deleteCustomer, getCustomerSales,
 } from "../firebase/customerActions";
+import { getSales } from "../firebase/salesActions";
 import { useAuth } from "../auth/AuthContext";
 import { PageShell, Field, Input, PrimaryButton, SecondaryButton, Pill, ConfirmModal } from "../ui/Layout";
 import InvoicePreview from "../components/InvoicePreview";
@@ -37,16 +38,26 @@ function CustomerHistoryModal({ customer, onClose }) {
   }, [customer?.id]);
 
   const stats = useMemo(() => {
-    // purchaseCount = number of invoices (not items)
-    const purchaseCount = sales.length;
-    // unitsBought = sum of all item quantities across all invoices
-    const unitsBought = sales.reduce((s, sale) => s + getSaleQuantity(sale), 0);
-    // totalSpent = sum of finalTotal
-    const totalSpent = sales.reduce((s, sale) => s + getSaleTotal(sale), 0);
+    // purchaseCount = number of active invoices (not cancelled)
+    const validSales = sales.filter(s => s.status !== "cancelled");
+    const purchaseCount = validSales.length;
+    // unitsBought = sum of all item quantities across valid invoices minus returns
+    const unitsBought = validSales.reduce((s, sale) => {
+      const sold = getSaleQuantity(sale);
+      const ret = (sale.returnedItems || []).reduce((acc, ri) => acc + Number(ri.returnedQty || 0), 0);
+      return s + (sold - ret);
+    }, 0);
+    // totalSpent = sum of finalTotal minus refunds
+    const totalSpent = validSales.reduce((s, sale) => s + (getSaleTotal(sale) - Number(sale.refundAmount || 0)), 0);
+    const totalDiscount = sales.reduce((s, sale) => s + Number(sale.discountAmount || 0), 0);
     const latestAt   = sales[0]?.soldAt || sales[0]?.createdAt;
-    const isHighVal  = totalSpent >= 50_000;
-    const isLoyal    = purchaseCount >= 3;
-    return { purchaseCount, unitsBought, totalSpent, latestAt, isHighVal, isLoyal };
+    
+    const isPremium = totalSpent >= 250_000;
+    const isHighVal = totalSpent >= 100_000 && !isPremium;
+    const isLoyal   = purchaseCount >= 5;
+    const isNew     = purchaseCount < 2;
+
+    return { purchaseCount, unitsBought, totalSpent, totalDiscount, latestAt, isPremium, isHighVal, isLoyal, isNew };
   }, [sales]);
 
   if (!customer) return null;
@@ -82,22 +93,29 @@ function CustomerHistoryModal({ customer, onClose }) {
           {/* Badges */}
           {!loading && (
             <div className="flex flex-wrap gap-2">
+              {stats.isPremium && (
+                <span className="inline-flex items-center rounded-full bg-purple-500/15 text-purple-300 text-xs font-semibold px-3 py-1 ring-1 ring-purple-500/25">👑 Premium Customer</span>
+              )}
               {stats.isHighVal && (
                 <span className="inline-flex items-center rounded-full bg-amber-500/15 text-amber-300 text-xs font-semibold px-3 py-1 ring-1 ring-amber-500/25">💎 High Value</span>
               )}
               {stats.isLoyal && (
                 <span className="inline-flex items-center rounded-full bg-indigo-500/15 text-indigo-300 text-xs font-semibold px-3 py-1 ring-1 ring-indigo-500/25">⭐ Loyal Customer</span>
               )}
+              {stats.isNew && (
+                <span className="inline-flex items-center rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-semibold px-3 py-1 ring-1 ring-emerald-500/25">🌱 New Customer</span>
+              )}
             </div>
           )}
 
           {/* Stats */}
           {!loading && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               {[
                 { label: "Purchases",    value: stats.purchaseCount },
                 { label: "Units Bought", value: stats.unitsBought },
                 { label: "Total Spent",  value: fc(stats.totalSpent) },
+                { label: "Total Discount", value: fc(stats.totalDiscount) },
                 { label: "Last Purchase",value: fmtDate(stats.latestAt) },
               ].map(({ label, value }) => (
                 <div key={label} className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
@@ -124,6 +142,7 @@ function CustomerHistoryModal({ customer, onClose }) {
                     <th className="px-4 py-2.5 text-right">Subtotal</th>
                     <th className="px-4 py-2.5 text-right">Discount</th>
                     <th className="px-4 py-2.5 text-right">Final Total</th>
+                    <th className="px-4 py-2.5 text-center">Status</th>
                     <th className="px-4 py-2.5">Date</th>
                     <th className="px-4 py-2.5"></th>
                   </tr>
@@ -173,8 +192,14 @@ function CustomerHistoryModal({ customer, onClose }) {
                     const total    = Number(sale.finalTotal || sale.totalAfterDiscount || sale.totalPrice || sub || 0);
                     const dateAt   = sale.soldAt || sale.createdAt;
 
+                    const status = sale.status || "completed";
+                    const isCancelled = status === "cancelled";
+                    const isFullyReturned = status === "returned";
+                    const isPartialReturn = status === "partially_returned";
+                    const finalDisplay = sale.finalTotalAfterReturn ?? total;
+
                     return (
-                      <tr key={sale.id} className="border-t border-white/10 hover:bg-white/[0.02] transition align-top">
+                      <tr key={sale.id} className={`border-t border-white/10 hover:bg-white/[0.02] transition align-top ${isCancelled ? "opacity-60" : ""}`}>
                         <td className="px-4 py-3">
                           <div className="font-mono text-xs text-indigo-300">{invNum}</div>
                           {isMulti && <div className="text-[10px] text-white/30 mt-0.5">{rawItems.length} items</div>}
@@ -195,7 +220,22 @@ function CustomerHistoryModal({ customer, onClose }) {
                             </span>
                           ) : <span className="text-white/30">—</span>}
                         </td>
-                        <td className="px-4 py-3 text-right font-semibold text-emerald-300">{fc(total)}</td>
+                        <td className="px-4 py-3 text-right">
+                          {isCancelled ? (
+                            <span className="line-through text-red-400/50">{fc(total)}</span>
+                          ) : (
+                            <div className="font-semibold text-emerald-300">
+                              {fc(finalDisplay)}
+                              {sale.refundAmount > 0 && <div className="text-[10px] text-red-400 font-normal">−{fc(sale.refundAmount)}</div>}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {isCancelled ? <span className="inline-block px-2 py-0.5 rounded bg-red-500/20 text-red-300 text-[10px] font-bold uppercase tracking-wider">Cancelled</span> :
+                           isFullyReturned ? <span className="inline-block px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[10px] font-bold uppercase tracking-wider">Returned</span> :
+                           isPartialReturn ? <span className="inline-block px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase tracking-wider">Partial Ret</span> :
+                           <span className="inline-block px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold uppercase tracking-wider">Completed</span>}
+                        </td>
                         <td className="px-4 py-3 text-white/40 text-xs whitespace-nowrap">{fmtDate(dateAt)}</td>
                         <td className="px-4 py-3">
                           <button onClick={() => setInvoiceSale(sale)}
@@ -233,7 +273,10 @@ export default function CustomersPage() {
   const [confirmModal,    setConfirmModal]    = useState(null);
   const [historyCustomer, setHistoryCustomer] = useState(null);
 
+  const [allSales,          setAllSales]        = useState([]);
+
   useEffect(() => {
+    getSales().then(setAllSales).catch(console.error);
     return listenCustomers(
       (data) => { setCustomers(data); setLoading(false); },
       (err)  => { console.error(err); setMsg("Failed to load customers."); setLoading(false); }
@@ -247,6 +290,94 @@ export default function CustomersPage() {
       [c.name, c.email, c.phone, c.company].some((f) => (f || "").toLowerCase().includes(s))
     );
   }, [customers, search]);
+
+  const customerStats = useMemo(() => {
+    let totalRevenue = 0;
+    const cidMap = {};
+    for (const sale of allSales) {
+      if (!sale.customerId) continue;
+      if (sale.status === "cancelled") continue;
+      
+      const cid = sale.customerId;
+      if (!cidMap[cid]) {
+        cidMap[cid] = { totalSpent: 0, purchases: 0 };
+      }
+      const total = getSaleTotal(sale) - Number(sale.refundAmount || 0);
+      cidMap[cid].totalSpent += total;
+      cidMap[cid].purchases += 1;
+      totalRevenue += total;
+    }
+
+    let highValue = 0;
+    let loyal = 0;
+    let newCust = 0;
+
+    customers.forEach(c => {
+      const spent = cidMap[c.id]?.totalSpent || 0;
+      const purchases = cidMap[c.id]?.purchases || 0;
+      
+      if (spent >= 100000) highValue++;
+      if (purchases >= 5) loyal++;
+      if (purchases < 2) newCust++;
+    });
+
+    const avgValue = customers.length ? totalRevenue / customers.length : 0;
+
+    return {
+      totalRevenue,
+      highValue,
+      loyal,
+      newCust,
+      avgValue,
+    };
+  }, [customers, allSales]);
+
+  const exportCustomerIntelligenceCsv = () => {
+    const cidMap = {};
+    for (const sale of allSales) {
+      if (!sale.customerId) continue;
+      const cid = sale.customerId;
+      if (!cidMap[cid]) {
+        cidMap[cid] = { totalSpent: 0, purchases: 0, unitsBought: 0, discountGiven: 0, lastPurchase: null };
+      }
+      cidMap[cid].totalSpent += getSaleTotal(sale);
+      cidMap[cid].purchases += 1;
+      cidMap[cid].unitsBought += getSaleQuantity(sale);
+      cidMap[cid].discountGiven += Number(sale.discountAmount || 0);
+      
+      const dateAt = sale.soldAt?.toDate ? sale.soldAt.toDate() : new Date(sale.soldAt ?? 0);
+      if (!cidMap[cid].lastPurchase || dateAt > cidMap[cid].lastPurchase) {
+        cidMap[cid].lastPurchase = dateAt;
+      }
+    }
+
+    const rows = [
+      ["Name", "Phone", "Email", "Company", "Purchases", "Units Bought", "Total Spent", "Total Discount", "Last Purchase", "Status"]
+    ];
+
+    customers.forEach(c => {
+      const st = cidMap[c.id] || { totalSpent: 0, purchases: 0, unitsBought: 0, discountGiven: 0, lastPurchase: null };
+      let status = "Regular";
+      if (st.totalSpent >= 250000) status = "Premium Customer";
+      else if (st.totalSpent >= 100000) status = "High Value Customer";
+      else if (st.purchases >= 5) status = "Loyal Customer";
+      else if (st.purchases < 2) status = "New Customer";
+
+      rows.push([
+        c.name, c.phone || "", c.email || "", c.company || "",
+        st.purchases, st.unitsBought, st.totalSpent, st.discountGiven,
+        st.lastPurchase ? st.lastPurchase.toLocaleDateString() : "—",
+        status
+      ]);
+    });
+
+    const csvContent = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "customer_intelligence.csv";
+    link.click();
+  };
 
   function resetForm() { setForm(initialForm); setMode("add"); setEditingId(null); setMsg(""); }
   function startEdit(c) {
@@ -293,10 +424,42 @@ export default function CustomersPage() {
 
       <PageShell>
         <div className="grid gap-6">
-          <div>
-            <Pill>Customer Management</Pill>
-            <h1 className="mt-3 text-2xl sm:text-3xl font-semibold text-white">Customer Database</h1>
-            <p className="mt-2 text-sm text-white/60">Manage records for sales, invoicing, and loyalty insights.</p>
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div>
+              <Pill>Customer Management</Pill>
+              <h1 className="mt-3 text-2xl sm:text-3xl font-semibold text-white">Customer Database</h1>
+              <p className="mt-2 text-sm text-white/60">Manage records for sales, invoicing, and loyalty insights.</p>
+            </div>
+            <SecondaryButton onClick={exportCustomerIntelligenceCsv}>
+              Export Customer Intelligence CSV
+            </SecondaryButton>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-white/50 mb-1">Total Customers</div>
+              <div className="text-xl font-semibold text-white">{customers.length}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-amber-300/80 mb-1">High Value</div>
+              <div className="text-xl font-semibold text-white">{customerStats.highValue}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-indigo-300/80 mb-1">Loyal Customers</div>
+              <div className="text-xl font-semibold text-white">{customerStats.loyal}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-emerald-300/80 mb-1">New Customers</div>
+              <div className="text-xl font-semibold text-white">{customerStats.newCust}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-white/50 mb-1">Total Rev (Linked)</div>
+              <div className="text-xl font-semibold text-emerald-300">{fc(customerStats.totalRevenue)}</div>
+            </div>
+            <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4">
+              <div className="text-xs text-white/50 mb-1">Avg Value</div>
+              <div className="text-xl font-semibold text-white">{fc(customerStats.avgValue)}</div>
+            </div>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-12">
