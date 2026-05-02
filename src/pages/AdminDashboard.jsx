@@ -46,9 +46,13 @@ import {
 import { getSales } from "../firebase/salesActions";
 import { getSaleItems, getSaleTotal, getSaleQuantity, getSaleItemSummary } from "../utils/saleHelpers";
 import { listenNotifications } from "../firebase/notificationActions";
+import { listenAnomalyAlerts } from "../firebase/anomalyActions";
 import { listenSuppliers } from "../firebase/supplierActions";
 import { listenCustomers } from "../firebase/customerActions";
 import BulkImportModal from "../components/BulkImportModal";
+import AiSummaryPanel from "../components/AiSummaryPanel";
+import ReauthModal from "../components/ReauthModal";
+import { generateBusinessSummary } from "../utils/aiSummaryRules";
 
 const initialForm = {
   itemName: "",
@@ -171,10 +175,18 @@ export default function AdminDashboard() {
   function openConfirm(opts) { setConfirmModal(opts); }
   function closeConfirm() { setConfirmModal(null); }
 
+  const [reauthModal, setReauthModal] = useState(null);
+  function openReauth(opts) { setReauthModal(opts); }
+  function closeReauth() { setReauthModal(null); }
+
   const [notifications, setNotifications] = useState([]);
   const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [lowStockPreviewAlerts, setLowStockPreviewAlerts] = useState([]);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  // Preview slice (3 items) for Suspicious Activity preview panel
+  const [anomalyAlerts, setAnomalyAlerts] = useState([]);
+  // Full list for AI summary computation
+  const [allAnomalyAlerts, setAllAnomalyAlerts] = useState([]);
 
   // Supplier linking state for inventory form
   const [suppliers, setSuppliers] = useState([]);
@@ -229,6 +241,20 @@ export default function AdminDashboard() {
       (data) => setSuppliers(data),
       (err)  => console.error("Failed to load suppliers:", err)
     );
+  }, []);
+
+  // Load anomaly alerts — full list for AI summary, slice for preview panel
+  useEffect(() => {
+    const unsub = listenAnomalyAlerts((data) => {
+      setAllAnomalyAlerts(data); // full set for AI summary
+      // preview panel shows latest 3 non-resolved
+      const activeOnly = data.filter((a) => {
+        const status = String(a.status || "active").toLowerCase();
+        return status !== "resolved";
+      });
+      setAnomalyAlerts(activeOnly.slice(0, 3));
+    });
+    return () => unsub();
   }, []);
 
   useEffect(() => {
@@ -730,6 +756,18 @@ export default function AdminDashboard() {
     };
   }, [items, salesAnalytics]);
 
+  // ─── AI Business Summary (rule-based) ────────────────────────────────────────
+  const aiSummary = useMemo(() => {
+    return generateBusinessSummary({
+      sales,
+      inventory: items,
+      customers,
+      suppliers,
+      notifications,
+      anomalies: allAnomalyAlerts,
+    });
+  }, [sales, items, customers, suppliers, notifications, allAnomalyAlerts]);
+
   function resetForm() {
     setForm(initialForm);
     setMode("add");
@@ -849,21 +887,27 @@ export default function AdminDashboard() {
       variant: "danger",
       requireReason: false,
       onConfirm: async () => {
-        setBusy(true);
-        setMsg("");
-        try {
-          await deleteInventoryItem(item.id, user, {
-            itemName: item.itemName,
-            sku: item.sku,
-          });
-          setMsg("🗑️ Inventory item deleted.");
-          if (editingId === item.id) resetForm();
-        } catch (err) {
-          console.error(err);
-          setMsg("❌ Failed to delete inventory item.");
-        } finally {
-          setBusy(false);
-        }
+        openReauth({
+          title: "Verify Deletion",
+          body: `Deleting "${item.itemName}" is a permanent action. Please enter your password to confirm.`,
+          onConfirm: async () => {
+            setBusy(true);
+            setMsg("");
+            try {
+              await deleteInventoryItem(item.id, user, {
+                itemName: item.itemName,
+                sku: item.sku,
+              });
+              setMsg("🗑️ Inventory item deleted.");
+              if (editingId === item.id) resetForm();
+            } catch (err) {
+              console.error(err);
+              setMsg("❌ Failed to delete inventory item.");
+            } finally {
+              setBusy(false);
+            }
+          }
+        });
       },
     });
   }
@@ -876,45 +920,53 @@ export default function AdminDashboard() {
       variant: "warning",
       requireReason: false,
       onConfirm: async () => {
-        setUserMsg("");
-        try {
-          await updateDoc(doc(db, "users", targetUser.id), {
-            role: newRole,
-            updatedAt: serverTimestamp(),
-          });
-          await logAction(
-            "USER_ROLE_UPDATE",
-            user.uid,
-            user.email,
-            {
-              targetUserId: targetUser.id,
-              targetEmail: targetUser.email,
-              oldRole,
-              newRole,
-            },
-            "user",
-            targetUser.id
-          );
+        openReauth({
+          title: "Verify Role Change",
+          body: `You are changing ${targetUser.email}'s role to ${newRole}. This is a sensitive security action.`,
+          onConfirm: async () => {
+            setUserMsg("");
+            try {
+              await updateDoc(doc(db, "users", targetUser.id), {
+                role: newRole,
+                updatedAt: serverTimestamp(),
+              });
+              await logAction(
+                "USER_ROLE_UPDATE",
+                user.uid,
+                user.email,
+                {
+                  targetUserId: targetUser.id,
+                  targetEmail: targetUser.email,
+                  oldRole,
+                  newRole,
+                  reauthenticated: true,
+                  protectedAction: true
+                },
+                "user",
+                targetUser.id
+              );
 
-          try {
-            const { createNotification } = await import("../firebase/notificationActions");
-            await createNotification({
-              targetUid: targetUser.id,
-              title: "Account Role Updated",
-              message: `Your account role has been changed from ${oldRole} to ${newRole}.`,
-              type: "warning",
-              targetType: "user",
-              targetId: targetUser.id
-            });
-          } catch (notifErr) {
-            console.error("Failed to send role update notification:", notifErr);
+              try {
+                const { createNotification } = await import("../firebase/notificationActions");
+                await createNotification({
+                  targetUid: targetUser.id,
+                  title: "Account Role Updated",
+                  message: `Your account role has been changed from ${oldRole} to ${newRole}.`,
+                  type: "warning",
+                  targetType: "user",
+                  targetId: targetUser.id
+                });
+              } catch (notifErr) {
+                console.error("Failed to send role update notification:", notifErr);
+              }
+
+              setUserMsg(`✅ Role updated for ${targetUser.email}`);
+            } catch (err) {
+              console.error(err);
+              setUserMsg("❌ Failed to update user role.");
+            }
           }
-
-          setUserMsg(`✅ Role updated for ${targetUser.email}`);
-        } catch (err) {
-          console.error(err);
-          setUserMsg("❌ Failed to update user role.");
-        }
+        });
       },
     });
   }
@@ -930,45 +982,53 @@ export default function AdminDashboard() {
       variant: isDisabling ? "danger" : "warning",
       requireReason: false,
       onConfirm: async () => {
-        setUserMsg("");
-        try {
-          await updateDoc(doc(db, "users", targetUser.id), {
-            status: newStatus,
-            updatedAt: serverTimestamp(),
-          });
-          await logAction(
-            "USER_STATUS_UPDATE",
-            user.uid,
-            user.email,
-            {
-              targetUserId: targetUser.id,
-              targetEmail: targetUser.email,
-              oldStatus,
-              newStatus,
-            },
-            "user",
-            targetUser.id
-          );
+        openReauth({
+          title: isDisabling ? "Verify Account Disable" : "Verify Account Activation",
+          body: `Updating status for ${targetUser.email} requires administrator verification.`,
+          onConfirm: async () => {
+            setUserMsg("");
+            try {
+              await updateDoc(doc(db, "users", targetUser.id), {
+                status: newStatus,
+                updatedAt: serverTimestamp(),
+              });
+              await logAction(
+                "USER_STATUS_UPDATE",
+                user.uid,
+                user.email,
+                {
+                  targetUserId: targetUser.id,
+                  targetEmail: targetUser.email,
+                  oldStatus,
+                  newStatus,
+                  reauthenticated: true,
+                  protectedAction: true
+                },
+                "user",
+                targetUser.id
+              );
 
-          try {
-            const { createNotification } = await import("../firebase/notificationActions");
-            await createNotification({
-              targetUid: targetUser.id,
-              title: "Account Status Updated",
-              message: `Your account has been ${newStatus}.`,
-              type: newStatus === "disabled" ? "danger" : "info",
-              targetType: "user",
-              targetId: targetUser.id
-            });
-          } catch (notifErr) {
-            console.error("Failed to send status update notification:", notifErr);
+              try {
+                const { createNotification } = await import("../firebase/notificationActions");
+                await createNotification({
+                  targetUid: targetUser.id,
+                  title: "Account Status Updated",
+                  message: `Your account has been ${newStatus}.`,
+                  type: newStatus === "disabled" ? "danger" : "info",
+                  targetType: "user",
+                  targetId: targetUser.id
+                });
+              } catch (notifErr) {
+                console.error("Failed to send status update notification:", notifErr);
+              }
+
+              setUserMsg(`✅ Status updated for ${targetUser.email}`);
+            } catch (err) {
+              console.error(err);
+              setUserMsg("❌ Failed to update user status.");
+            }
           }
-
-          setUserMsg(`✅ Status updated for ${targetUser.email}`);
-        } catch (err) {
-          console.error(err);
-          setUserMsg("❌ Failed to update user status.");
-        }
+        });
       },
     });
   }
@@ -1066,6 +1126,7 @@ export default function AdminDashboard() {
   return (
     <>
     <ConfirmModal state={confirmModal} onClose={closeConfirm} />
+    <ReauthModal state={reauthModal} onClose={closeReauth} />
     {showBulkImport && (
       <BulkImportModal
         existingItems={items}
@@ -1661,6 +1722,62 @@ export default function AdminDashboard() {
             </div>
           </div>
         </div>
+
+        {/* ── Suspicious Activity Preview ─────────────────────────────────── */}
+        <div className="grid gap-6">
+          <div className="rounded-3xl bg-gradient-to-br from-red-500/[0.07] to-amber-500/[0.04] ring-1 ring-red-500/20 p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <SectionTitle
+                eyebrow="Security Monitoring"
+                title="Suspicious Activity Preview"
+                pill={`${anomalyAlerts.length} recent`}
+              />
+              <Link to="/notifications">
+                <SecondaryButton>View All Anomalies</SecondaryButton>
+              </Link>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {anomalyAlerts.length === 0 ? (
+                <div className="col-span-full rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 text-sm text-white/70 text-center">
+                  ✅ No suspicious activity detected yet. The system is monitoring sales, returns, cancellations, and admin actions.
+                </div>
+              ) : (
+                anomalyAlerts.map((alert) => {
+                  const severityStyle =
+                    alert.severity === "high"
+                      ? "bg-red-500/10 ring-red-500/25"
+                      : alert.severity === "medium"
+                      ? "bg-amber-500/10 ring-amber-500/20"
+                      : "bg-white/5 ring-white/10";
+                  const severityBadge =
+                    alert.severity === "high"
+                      ? "bg-red-500/20 text-red-300"
+                      : alert.severity === "medium"
+                      ? "bg-amber-500/20 text-amber-300"
+                      : "bg-slate-500/20 text-slate-300";
+                  return (
+                    <div key={alert.id} className={`rounded-2xl ring-1 p-4 flex flex-col justify-between ${severityStyle}`}>
+                      <div>
+                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${severityBadge}`}>
+                            {alert.severity || "low"}
+                          </span>
+                          <span className="font-semibold text-white text-sm truncate">{alert.title}</span>
+                        </div>
+                        <p className="text-xs text-white/70 line-clamp-2">{alert.message}</p>
+                      </div>
+                      <div className="mt-3 text-xs text-white/50">{formatDate(alert.createdAt)}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Level 2 Step 4: AI Business Summary ─────────────────────────── */}
+        <AiSummaryPanel summary={aiSummary} />
 
         <div className="flex gap-2 border-b border-white/10 pb-4 flex-wrap">
           <button

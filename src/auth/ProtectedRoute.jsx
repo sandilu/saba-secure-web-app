@@ -25,7 +25,7 @@ export default function ProtectedRoute({ children }) {
   }
 
   if (isDisabled) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/unauthorized" replace />;
   }
 
   return children;

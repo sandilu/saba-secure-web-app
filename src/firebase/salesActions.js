@@ -1,11 +1,13 @@
 // src/firebase/salesActions.js — Multi-item cart sale support
 import {
-  collection, doc, getDocs, orderBy,
+  collection, doc, getDocs, limit, orderBy,
   query, runTransaction, serverTimestamp,
 } from "firebase/firestore";
 import { db } from "./firebaseServices";
 import { logAction } from "./auditLogger";
 import { generateInvoiceNumber } from "../utils/saleHelpers";
+import { runSaleAnomalyChecks, runReturnCancelAnomalyChecks } from "../utils/anomalyRules";
+import { createAnomalyAlerts } from "./anomalyActions";
 
 /**
  * Create a multi-item sale in one atomic Firestore transaction.
@@ -211,6 +213,46 @@ export async function createSale({
     }
   }
 
+  // ── Anomaly detection ────────────────────────────────────────────────────────
+  // Run after sale is saved. Failures here must NEVER break the sale creation.
+  try {
+    // Build a full sale-like object mirroring what is saved in Firestore
+    const saleObj = {
+      invoiceNumber,
+      subtotal,
+      discountPercent:  safeDiscPct,
+      discountAmount:   safeDiscAmt2,
+      discountSource:   discountSource || "none",
+      finalTotal:       finalTotal2,
+      totalBeforeDiscount: subtotal,
+      totalAfterDiscount:  finalTotal2,
+      items:            finalSaleItems,
+      soldByEmail,
+      customerName:     customerId ? customerName : "Walk-in Customer",
+      customerId:       customerId || null,
+    };
+
+    console.log("[createSale] Running anomaly checks:",
+      "invoice=", invoiceNumber,
+      "discPct=", safeDiscPct,
+      "discAmt=", safeDiscAmt2,
+      "subtotal=", subtotal,
+      "finalTotal=", finalTotal2,
+      "source=", discountSource);
+
+    // Fetch current inventory snapshot for stock-drop check
+    const invSnap = await getDocs(collection(db, "inventoryItems"));
+    const currentInventory = invSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const anomalies = runSaleAnomalyChecks({ sale: saleObj, inventoryItems: currentInventory });
+    console.log("[createSale] Anomaly checks complete, detected:", anomalies.length, anomalies.map(a => a.type));
+    if (anomalies.length > 0) {
+      await createAnomalyAlerts(anomalies, { uid: soldBy, email: soldByEmail });
+    }
+  } catch (anomalyErr) {
+    console.error("[createSale] Anomaly check failed:", anomalyErr);
+  }
+
   return { invoiceNumber, finalTotal: finalTotal2, subtotal };
 }
 
@@ -228,70 +270,109 @@ export async function cancelSale({ saleId, reason, user }) {
   if (!saleId) throw new Error("Sale ID is required.");
   if (!reason || !reason.trim()) throw new Error("Cancel reason is required.");
 
+  console.log("[cancelSale] Starting cancel for sale:", saleId);
+
   let invoiceNumber = "";
-  let refundAmt = 0;
 
   await runTransaction(db, async (tx) => {
-    const saleRef = doc(db, "sales", saleId);
+    const saleRef  = doc(db, "sales", saleId);
     const saleSnap = await tx.get(saleRef);
     if (!saleSnap.exists()) throw new Error("Sale not found.");
     const sale = saleSnap.data();
 
     if (sale.status === "cancelled") throw new Error("Sale is already cancelled.");
-    if (sale.status === "returned") throw new Error("Sale is fully returned. Cannot cancel.");
+    if (sale.status === "returned")  throw new Error("Sale is fully returned — cannot cancel.");
 
-    invoiceNumber = sale.invoiceNumber;
-    refundAmt = Number(sale.finalTotalAfterReturn ?? sale.finalTotal ?? sale.totalPrice ?? 0);
+    invoiceNumber = sale.invoiceNumber || "";
 
-    const items = sale.items || [];
-    
-    // Read all inventory items first (transactions require all reads before writes)
-    const invRefs = items.map(ci => ({
-      ref: doc(db, "inventoryItems", ci.itemId),
-      qtyRestored: Number(ci.quantitySold || 0) - Number(
-        (sale.returnedItems || []).find(ri => ri.itemId === ci.itemId)?.returnedQty || 0
-      )
-    }));
+    // Normalise items: support BOTH old single-item AND new multi-item schemas
+    // Old schema: { itemId, quantitySold } at root level
+    // New schema: { items: [{ itemId, quantitySold }] }
+    let itemsToRestore = [];
+    if (sale.items && sale.items.length > 0) {
+      itemsToRestore = sale.items
+        .filter((ci) => ci.itemId)
+        .map((ci) => {
+          const qtySold = Number(ci.quantitySold || ci.quantity || 0);
+          const alreadyReturned = Number(
+            (sale.returnedItems || []).find((ri) => ri.itemId === ci.itemId)?.returnedQty || 0
+          );
+          return { itemId: ci.itemId, qtyRestored: Math.max(0, qtySold - alreadyReturned) };
+        });
+    } else if (sale.itemId) {
+      // Old single-item schema
+      itemsToRestore = [{ itemId: sale.itemId, qtyRestored: Number(sale.quantitySold || 0) }];
+    }
 
-    const invSnaps = await Promise.all(invRefs.map(ir => tx.get(ir.ref)));
+    // All reads must come before writes in a transaction
+    const invRefs = itemsToRestore
+      .filter((i) => i.itemId && i.qtyRestored > 0)
+      .map((i) => ({ ref: doc(db, "inventoryItems", i.itemId), qtyRestored: i.qtyRestored }));
 
-    // Restore quantities
+    const invSnaps = await Promise.all(invRefs.map((ir) => tx.get(ir.ref)));
+
+    // Restore inventory quantities
     for (let i = 0; i < invSnaps.length; i++) {
       const snap = invSnaps[i];
-      const ir = invRefs[i];
-      if (snap.exists() && ir.qtyRestored > 0) {
-        const inv = snap.data();
-        tx.update(ir.ref, { 
-          quantity: Number(inv.quantity || 0) + ir.qtyRestored,
-          updatedAt: serverTimestamp() 
+      const ir   = invRefs[i];
+      if (snap.exists()) {
+        const currentQty = Number(snap.data().quantity || 0);
+        tx.update(ir.ref, {
+          quantity:  currentQty + ir.qtyRestored,
+          updatedAt: serverTimestamp(),
         });
+        console.log(`[cancelSale] Restoring ${ir.qtyRestored} units for item ${ir.ref.id}`);
       }
     }
 
-    // Update Sale status
+    // Mark sale cancelled
     tx.update(saleRef, {
-      status: "cancelled",
-      cancelledAt: serverTimestamp(),
-      cancelledByUid: user.uid,
+      status:           "cancelled",
+      cancelledAt:      serverTimestamp(),
+      cancelledByUid:   user.uid,
       cancelledByEmail: user.email,
-      cancelReason: reason.trim()
+      cancelReason:     reason.trim(),
     });
   });
 
-  // Audit & Notifications
-  await logAction("SALE_CANCELLED", user.uid, user.email, { invoiceNumber, reason }, "sale", saleId).catch(() => {});
-  
+  console.log("[cancelSale] Transaction OK for:", saleId, "invoice:", invoiceNumber);
+
+  // Audit log
+  await logAction("SALE_CANCELLED", user.uid, user.email, { invoiceNumber, reason }, "sale", saleId)
+    .catch((e) => console.warn("[cancelSale] Audit log failed:", e));
+
+  // Notification
   try {
     const { createNotification } = await import("./notificationActions");
     await createNotification({
       targetRole: "admin",
-      title: "Sale Cancelled",
-      message: `Invoice ${invoiceNumber} was cancelled by ${user.email}. Inventory restored.`,
-      type: "warning",
+      title:      "Sale Cancelled",
+      message:    `Invoice ${invoiceNumber} was cancelled by ${user.email}. Inventory has been restored.`,
+      type:       "warning",
       targetType: "sale",
-      targetId: saleId,
+      targetId:   saleId,
     });
-  } catch (err) { console.error("Notification error:", err); }
+  } catch (err) {
+    console.warn("[cancelSale] Notification failed (non-critical):", err);
+  }
+
+  // Anomaly: repeated cancellations
+  try {
+    const recentSnap = await getDocs(
+      query(collection(db, "sales"), orderBy("soldAt", "desc"), limit(25))
+    );
+    const recentSales = recentSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const cancelledCount = recentSales.filter((s) => s.status === "cancelled").length;
+    console.log("[cancelSale] Anomaly check: recent", recentSales.length, "sales, cancelled:", cancelledCount);
+    const anomalies = runReturnCancelAnomalyChecks({ recentSales });
+    const cancelAnomalies = anomalies.filter((a) => a.type === "repeated_cancellations");
+    if (cancelAnomalies.length > 0) {
+      console.log("[cancelSale] Repeated cancellation anomaly detected!");
+      await createAnomalyAlerts(cancelAnomalies, { uid: user.uid, email: user.email });
+    }
+  } catch (anomalyErr) {
+    console.error("[cancelSale] Anomaly check failed:", anomalyErr);
+  }
 }
 
 /**
@@ -419,4 +500,22 @@ export async function returnSale({ saleId, returnMap, reason, user }) {
       targetId: saleId,
     });
   } catch (err) { console.error("Notification error:", err); }
+
+  // ── Anomaly detection — repeated returns ─────────────────────────────────────
+  try {
+    const recentSnap = await getDocs(
+      query(collection(db, "sales"), orderBy("soldAt", "desc"), limit(25))
+    );
+    const recentSales = recentSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const returnCount = recentSales.filter((s) => s.status === "returned" || s.status === "partially_returned").length;
+    console.log("[returnSale] Anomaly check: recent", recentSales.length, "sales, returns:", returnCount);
+    const anomalies = runReturnCancelAnomalyChecks({ recentSales });
+    const returnAnomalies = anomalies.filter((a) => a.type === "repeated_returns");
+    if (returnAnomalies.length > 0) {
+      console.log("[returnSale] Repeated return anomaly detected!");
+      await createAnomalyAlerts(returnAnomalies, { uid: user.uid, email: user.email });
+    }
+  } catch (anomalyErr) {
+    console.error("[returnSale] Anomaly check failed:", anomalyErr);
+  }
 }

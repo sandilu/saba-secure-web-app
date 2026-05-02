@@ -38,9 +38,10 @@ export function Field({ label, children, hint }) {
   );
 }
 
-export function Input({ className = "", ...props }) {
+export const Input = React.forwardRef(({ className = "", ...props }, ref) => {
   return (
     <input
+      ref={ref}
       {...props}
       className={cx(
         "w-full rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-white/25",
@@ -48,7 +49,8 @@ export function Input({ className = "", ...props }) {
       )}
     />
   );
-}
+});
+Input.displayName = "Input";
 
 export function Select({ className = "", children, ...props }) {
   return (
@@ -64,9 +66,10 @@ export function Select({ className = "", children, ...props }) {
   );
 }
 
-export function TextArea({ className = "", ...props }) {
+export const TextArea = React.forwardRef(({ className = "", ...props }, ref) => {
   return (
     <textarea
+      ref={ref}
       {...props}
       className={cx(
         "w-full rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-white/25 min-h-[110px]",
@@ -74,7 +77,8 @@ export function TextArea({ className = "", ...props }) {
       )}
     />
   );
-}
+});
+TextArea.displayName = "TextArea";
 
 export function PrimaryButton({ children, className = "", type = "button", ...props }) {
   return (

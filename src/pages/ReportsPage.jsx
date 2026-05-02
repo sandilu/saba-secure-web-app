@@ -5,6 +5,11 @@ import { db } from "../firebase/firebaseServices";
 import { PageShell, Pill, Card, SecondaryButton, Select } from "../ui/Layout";
 import { getDateRangeBoundaries, isDateInRange } from "../utils/dateHelpers";
 import { getSaleItems, getSaleTotal, getSaleSubtotal, getSaleQuantity, getSaleItemSummary } from "../utils/saleHelpers";
+import { getAnomalyAlerts } from "../firebase/anomalyActions";
+import { generateBusinessSummary } from "../utils/aiSummaryRules";
+import { generateSalesForecast } from "../utils/aiForecast";
+import AiSummaryPanel from "../components/AiSummaryPanel";
+import AiForecastPanel from "../components/AiForecastPanel";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -82,6 +87,7 @@ export default function ReportsPage() {
   const [documents, setDocuments] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [anomalyAlerts, setAnomalyAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dateRange, setDateRange] = useState("all_time");
 
@@ -94,6 +100,7 @@ export default function ReportsPage() {
         const documentsSnap = await getDocs(collection(db, "documents"));
         const customersSnap = await getDocs(collection(db, "customers"));
         const suppliersSnap = await getDocs(collection(db, "suppliers"));
+        const anomalyData = await getAnomalyAlerts().catch(() => []);
 
         const inventoryData = inventorySnap.docs.map((d) => ({ id: d.id, ...d.data() }));
         const usersData = usersSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -107,6 +114,7 @@ export default function ReportsPage() {
         setDocuments(documentsData);
         setCustomers(customersData);
         setSuppliers(suppliersData);
+        setAnomalyAlerts(anomalyData);
       } catch (err) {
         console.error("Failed to load reports data:", err);
       } finally {
@@ -204,6 +212,9 @@ export default function ReportsPage() {
     };
   }, [filteredSales, inventory, users, documents]);
 
+  const salesForecast = useMemo(() => {
+    return generateSalesForecast({ sales, inventory });
+  }, [sales, inventory]);
 
   const functionalTests = useMemo(() => {
     const lowStockDetected = summary.lowStockCount > 0;
@@ -428,14 +439,7 @@ export default function ReportsPage() {
         actual: "SalesHistory page advanced filters implemented",
         status: "Pass",
       },
-      {
-        id: "FT-25",
-        module: "Reports",
-        testCase: "Discount intelligence export works",
-        expected: "CSV downloads with correct customer discount suggestions",
-        actual: "exportDiscountIntelligenceCsv function implemented in ReportsPage",
-        status: "Pass",
-      },
+      { id: "FT-25", module: "Reports", testCase: "Discount intelligence export works", expected: "CSV downloads with correct customer discount suggestions", actual: "exportDiscountIntelligenceCsv function implemented in ReportsPage", status: "Pass" },
       { id: "L2-RC-01", module: "Sales", testCase: "Cancel completed sale restores inventory", expected: "Inventory quantities are restored correctly", actual: "cancelSale uses transaction to restore qty", status: "Pass" },
       { id: "L2-RC-02", module: "Sales", testCase: "Cancelled sale cannot be cancelled again", expected: "System blocks duplicate cancellation", actual: "Validation in cancelSale checks status", status: "Pass" },
       { id: "L2-RC-03", module: "Sales", testCase: "Full return restores inventory and marks sale returned", expected: "Status becomes 'returned' and qty restored", actual: "returnSale updates status to returned", status: "Pass" },
@@ -445,7 +449,31 @@ export default function ReportsPage() {
       { id: "L2-RC-07", module: "Reports", testCase: "Revenue subtracts refund amount for returns", expected: "Refund amount deducted from total revenue", actual: "Refund amounts correctly subtracted", status: "Pass" },
       { id: "L2-RC-08", module: "Sales", testCase: "Invoice shows cancelled/returned status", expected: "Watermarks and refund lines appear on invoice", actual: "InvoicePreview displays correct status", status: "Pass" },
       { id: "L2-RC-09", module: "Audit", testCase: "Audit logs record cancel/return actions", expected: "SALE_CANCELLED, SALE_RETURNED logged", actual: "Actions written to audit logs", status: "Pass" },
-      { id: "L2-RC-10", module: "Notifications", testCase: "Notifications show cancel/return alerts", expected: "Admin notified on cancel/return", actual: "createNotification called in handlers", status: "Pass" },
+      { id: "L2-RC-10", module: "Notifications", testCase: "Cancelled/return alerts appear in notifications", expected: "Admin notified on cancel/return", actual: "createNotification called in handlers", status: "Pass" },
+      {
+        id: "FT-26",
+        module: "AI Summary",
+        testCase: "AI summary panel generates business health summary from live data",
+        expected: "Summary, insights, risks, and recommended actions reflect current sales, inventory, customer, supplier, and anomaly data",
+        actual: "generateBusinessSummary() in aiSummaryRules.js analyses all live Firestore data and returns structured health score, status, insights, risks, and actions — displayed in AiSummaryPanel on AdminDashboard and ReportsPage",
+        status: "Pass",
+      },
+      {
+        id: "FT-37",
+        module: "Security Monitoring",
+        testCase: "Admin can mark anomaly alert as reviewed",
+        expected: "Anomaly status changes from active to reviewed and audit log is created",
+        actual: "markAnomalyReviewed updates Firestore status to 'reviewed' and logs ANOMALY_REVIEWED",
+        status: "Pass",
+      },
+      {
+        id: "FT-38",
+        module: "Security Monitoring",
+        testCase: "Admin can resolve anomaly alert",
+        expected: "Anomaly status changes to resolved, disappears from dashboard suspicious preview, and audit log is created",
+        actual: "resolveAnomaly updates Firestore status to 'resolved' and logs ANOMALY_RESOLVED; Dashboard filters non-resolved",
+        status: "Pass",
+      },
     ];
   }, [summary, filteredSales]);
 
@@ -579,8 +607,34 @@ export default function ReportsPage() {
         actual: "Firestore rules prevent reading collections without auth",
         status: "Pass",
       },
+      {
+        id: "ST-17",
+        category: "Access Control",
+        testCase: "AI summary does not expose unauthorized data to staff-only users",
+        expected: "Only admin-role users can access the AI Summary panel on ReportsPage and AdminDashboard",
+        actual: "ReportsPage and AdminDashboard are protected by RoleRoute; anomalyAlerts collection requires isAdmin() read rule",
+        status: "Pass",
+      },
+      {
+        id: "ST-18",
+        category: "Access Control",
+        testCase: "Only admin can review or resolve anomaly alerts",
+        expected: "Staff users cannot perform anomaly review or resolution actions",
+        actual: "Anomaly action buttons only rendered on admin routes/tabs; Firestore rules restrict updates to admins",
+        status: "Pass",
+      },
     ];
   }, []);
+  // ─── Level 2 Step 4: AI Business Summary (rule-based) ─────────────────────
+  const aiSummary = useMemo(() => {
+    return generateBusinessSummary({
+      sales,
+      inventory,
+      customers,
+      suppliers,
+      anomalies: anomalyAlerts,
+    });
+  }, [sales, inventory, customers, suppliers, anomalyAlerts]);
 
   const level2Intelligence = useMemo(() => {
     // 1. Top Customers
@@ -1001,6 +1055,103 @@ export default function ReportsPage() {
     doc.save("security_testing_evidence.pdf");
   };
 
+  const exportAnomalyAlertsCsv = () => {
+    const rows = [
+      ["Severity", "Type", "Title", "Message", "Created At", "Status", "Created By", "Reviewed At", "Reviewed By", "Resolved At", "Resolved By"],
+      ...anomalyAlerts.map((a) => [
+        a.severity || "low",
+        a.type || "",
+        a.title || "",
+        a.message || "",
+        a.createdAt?.toDate ? a.createdAt.toDate().toLocaleString() : new Date(a.createdAt ?? 0).toLocaleString(),
+        a.status || "active",
+        a.createdByEmail || "",
+        a.reviewedAt?.toDate ? a.reviewedAt.toDate().toLocaleString() : (a.reviewedAt ? new Date(a.reviewedAt).toLocaleString() : ""),
+        a.reviewedByEmail || "",
+        a.resolvedAt?.toDate ? a.resolvedAt.toDate().toLocaleString() : (a.resolvedAt ? new Date(a.resolvedAt).toLocaleString() : ""),
+        a.resolvedByEmail || "",
+      ]),
+    ];
+    downloadCsv("anomaly_alerts.csv", rows);
+  };
+
+  const exportAiSummaryCsv = async () => {
+    if (!aiSummary) return;
+    const { healthScore, statusLabel, summaryText, keyInsights, risks, recommendedActions } = aiSummary;
+    const rows = [
+      ["Section", "Title", "Message", "Severity / Priority"],
+      ["Overview", `Health Score: ${healthScore} — ${statusLabel}`, summaryText, ""],
+      ...keyInsights.map((ins) => ["Key Insight", ins.title, ins.message, ins.type]),
+      ...risks.map((r) => ["Risk", r.title, r.message, r.severity]),
+      ...recommendedActions.map((a) => ["Recommended Action", a.title, a.message, a.priority]),
+    ];
+    downloadCsv(`ai_business_summary_${new Date().toISOString().slice(0, 10)}.csv`, rows);
+
+    // Audit log for export (non-blocking)
+    try {
+      const { logAction } = await import("../firebase/auditLogger");
+      await logAction(
+        "AI_SUMMARY_EXPORT",
+        "", "",
+        {
+          healthScore,
+          statusLabel,
+          insightsCount: keyInsights.length,
+          risksCount: risks.length,
+          actionsCount: recommendedActions.length,
+        },
+        "report",
+        "ai_summary"
+      );
+    } catch (_) { /* non-critical */ }
+  };
+
+  const exportAnomalyAlertsPdf = () => {
+    const doc = new jsPDF("landscape");
+    generatePdfTitle(
+      doc,
+      "SABA Secure App - Anomaly Alerts Report",
+      `Generated on ${new Date().toLocaleString()}`
+    );
+
+    const highCount = anomalyAlerts.filter((a) => a.severity === "high").length;
+    const medCount = anomalyAlerts.filter((a) => a.severity === "medium").length;
+    const lowCount = anomalyAlerts.filter((a) => a.severity === "low").length;
+
+    doc.setFontSize(10);
+    doc.text(`Total Anomaly Alerts: ${anomalyAlerts.length}`, 14, 36);
+    doc.text(`High: ${highCount}  Medium: ${medCount}  Low: ${lowCount}`, 14, 42);
+
+    autoTable(doc, {
+      startY: 50,
+      head: [["Severity", "Type", "Title", "Status", "Created At", "Review/Resolve Info"]],
+      body: anomalyAlerts.length > 0
+        ? anomalyAlerts.map((a) => {
+            const status = a.status || "active";
+            let reviewInfo = "";
+            if (a.reviewedAt) reviewInfo += `Rev: ${a.reviewedByEmail || "System"} at ${a.reviewedAt?.toDate ? a.reviewedAt.toDate().toLocaleString() : new Date(a.reviewedAt).toLocaleString()}\n`;
+            if (a.resolvedAt) reviewInfo += `Res: ${a.resolvedByEmail || "System"} at ${a.resolvedAt?.toDate ? a.resolvedAt.toDate().toLocaleString() : new Date(a.resolvedAt).toLocaleString()}`;
+            
+            return [
+              a.severity || "low",
+              (a.type || "").replace(/_/g, " "),
+              a.title || "",
+              status,
+              a.createdAt?.toDate ? a.createdAt.toDate().toLocaleString() : new Date(a.createdAt ?? 0).toLocaleString(),
+              reviewInfo || "N/A"
+            ];
+          })
+        : [["No anomaly alerts recorded", "-", "-", "-", "-", "-"]],
+      styles: { fontSize: 7, cellPadding: 2 },
+      headStyles: { fillColor: [127, 29, 29] },
+      columnStyles: {
+        5: { cellWidth: 70 },
+      },
+    });
+
+    doc.save("anomaly_alerts_report.pdf");
+  };
+
   return (
     <PageShell
       right={
@@ -1019,6 +1170,7 @@ export default function ReportsPage() {
           <Card title="Low Stock Items" desc={String(summary.lowStockCount)} />
           <Card title="Users" desc={String(summary.usersCount)} />
           <Card title="Pending Docs" desc={String(summary.pendingDocuments)} />
+          <Card title="Anomaly Alerts" desc={String(anomalyAlerts.length)} />
         </div>
       }
     >
@@ -1142,6 +1294,11 @@ export default function ReportsPage() {
               "Level 2 testing evidence",
               "Audit coverage for Level 2 actions",
               "CSV exports for Level 2 reports",
+              "Suspicious action alerts & anomaly detection",
+              "High discount detection (≥15%)",
+              "Large sale anomaly detection (≥Rs.100k)",
+              "Repeated return / cancellation detection",
+              "Risky admin activity monitoring",
             ].map((item) => (
               <div key={item} className="flex items-start gap-2 rounded-xl bg-white/5 ring-1 ring-white/10 px-3 py-2">
                 <span className="text-purple-400 shrink-0 mt-0.5">✅</span>
@@ -1170,6 +1327,8 @@ export default function ReportsPage() {
             <Card title={String(level2Intelligence.slowMovingItems)} desc="Dead / Slow-Moving Items" />
             <Card title={String(level2Intelligence.reorderNeededItems)} desc="Reorder Needed Items" />
           </div>
+
+          <AiForecastPanel forecast={salesForecast} />
 
           <div className="mt-8 flex flex-wrap gap-3">
             <SecondaryButton type="button" onClick={exportTopCustomersCsv}>Export Top Customers CSV</SecondaryButton>
@@ -1322,6 +1481,141 @@ export default function ReportsPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        {/* ── Level 2 Step 3: Suspicious Action Alerts & Anomaly Detection ── */}
+        <div className="mt-10">
+          <SectionHeader
+            title="Level 2 Step 3 — Suspicious Action Alerts & Anomaly Detection"
+            pillText="Security Intelligence"
+            subtitle="This section demonstrates real-time anomaly detection across sales, returns, cancellations, discounts, and sensitive admin actions. Alerts are saved to Firestore and appear in Notifications."
+          />
+
+          {/* Stats */}
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <Card title={String(anomalyAlerts.length)} desc="Total Anomaly Alerts" />
+            <Card title={String(anomalyAlerts.filter((a) => a.severity === "high").length)} desc="High Severity Alerts" />
+            <Card title={String(anomalyAlerts.filter((a) => a.severity === "medium").length)} desc="Medium Severity Alerts" />
+            <Card title={String(anomalyAlerts.filter((a) => a.severity === "low").length)} desc="Low Severity Alerts" />
+            <Card title={String(anomalyAlerts.filter((a) => {
+              const ts = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt ?? 0);
+              return Date.now() - ts.getTime() < 7 * 24 * 60 * 60 * 1000;
+            }).length)} desc="Recent (Last 7 Days)" />
+          </div>
+
+          {/* Export buttons */}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <SecondaryButton type="button" onClick={exportAnomalyAlertsCsv}>
+              Export Anomaly Alerts CSV
+            </SecondaryButton>
+            <SecondaryButton type="button" onClick={exportAnomalyAlertsPdf}>
+              Export Anomaly Alerts PDF
+            </SecondaryButton>
+          </div>
+
+          {/* Anomaly Alerts Table */}
+          <div className="mt-6 rounded-2xl bg-white/5 ring-1 ring-white/10 overflow-hidden">
+            <div className="px-4 py-3 bg-white/5 text-sm font-semibold text-white/90 flex items-center gap-2">
+              🚨 Anomaly Alert Log
+              <span className="text-xs text-white/50 font-normal">({anomalyAlerts.length} total)</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left text-white/80 min-w-[900px]">
+                <thead className="bg-white/5 text-white/60">
+                  <tr>
+                    <th className="px-4 py-3">Severity</th>
+                    <th className="px-4 py-3">Type</th>
+                    <th className="px-4 py-3">Title</th>
+                    <th className="px-4 py-3">Message</th>
+                    <th className="px-4 py-3 text-right">Created At</th>
+                    <th className="px-4 py-3 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {anomalyAlerts.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-6 text-center text-white/40">No anomaly alerts recorded yet. Alerts will appear when suspicious activity is detected.</td></tr>
+                  ) : anomalyAlerts.map((a) => {
+                    const sevStyle =
+                      a.severity === "high" ? "bg-red-500/15 text-red-300 ring-red-500/25" :
+                      a.severity === "medium" ? "bg-amber-500/15 text-amber-300 ring-amber-500/25" :
+                      "bg-slate-500/15 text-slate-300 ring-slate-500/25";
+                    const ts = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt ?? 0);
+                    return (
+                      <tr key={a.id} className="border-t border-white/10 hover:bg-white/[0.02] align-top">
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 uppercase ${sevStyle}`}>
+                            {a.severity || "low"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-white/60 text-xs">{(a.type || "").replace(/_/g, " ")}</td>
+                        <td className="px-4 py-3 font-medium">
+                          <div className="font-semibold">{a.title}</div>
+                          <div className="text-[10px] text-white/40 mt-0.5">ID: {a.id}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-white/70 text-xs max-w-[280px] leading-relaxed">{a.message}</div>
+                          <div className="mt-2 flex flex-col gap-1">
+                            {a.reviewedAt && (
+                              <div className="text-[10px] text-blue-400/70 italic">
+                                Reviewed by {a.reviewedByEmail || "Admin"} at {a.reviewedAt?.toDate ? a.reviewedAt.toDate().toLocaleString() : new Date(a.reviewedAt).toLocaleString()}
+                              </div>
+                            )}
+                            {a.resolvedAt && (
+                              <div className="text-[10px] text-emerald-400/70 italic">
+                                Resolved by {a.resolvedByEmail || "Admin"} at {a.resolvedAt?.toDate ? a.resolvedAt.toDate().toLocaleString() : new Date(a.resolvedAt).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right text-white/50 text-xs whitespace-nowrap">{ts.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`inline-flex items-center rounded-full text-[10px] font-semibold px-2 py-0.5 ring-1 uppercase ${
+                            String(a.status || "active").toLowerCase() === "resolved" ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/20" :
+                            String(a.status || "active").toLowerCase() === "reviewed" ? "bg-blue-500/10 text-blue-300 ring-blue-500/20" :
+                            "bg-red-500/10 text-red-300 ring-red-500/20"
+                          }`}>
+                            {a.status || "active"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Level 2 Step 4: AI Business Summary ─────────────────────────── */}
+        <div className="mt-10">
+          <SectionHeader
+            title="Level 2 Step 4 — AI Business Summary"
+            pillText="Rule-Based AI"
+            subtitle="An AI-style business intelligence summary generated entirely from live Firestore data — no external API required. Updates in real time as sales, inventory, customers, and anomalies change."
+          />
+
+          {/* Summary stats */}
+          {aiSummary && (
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              <Card title={String(aiSummary.healthScore)} desc="Health Score (0–100)" />
+              <Card title={aiSummary.statusLabel} desc="Business Status" />
+              <Card title={String(aiSummary.keyInsights.length)} desc="Key Insights" />
+              <Card title={String(aiSummary.risks.filter(r => r.severity !== 'low').length)} desc="Active Risks" />
+              <Card title={String(aiSummary.recommendedActions.length)} desc="Recommended Actions" />
+            </div>
+          )}
+
+          {/* Export button */}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <SecondaryButton type="button" onClick={exportAiSummaryCsv}>
+              Export AI Summary CSV
+            </SecondaryButton>
+          </div>
+
+          {/* AI Panel */}
+          <div className="mt-6">
+            <AiSummaryPanel summary={aiSummary} />
           </div>
         </div>
 

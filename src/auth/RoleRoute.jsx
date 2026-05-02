@@ -21,7 +21,7 @@ export default function RoleRoute({ allow = [], children }) {
   }
 
   if (isDisabled) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/unauthorized" replace />;
   }
 
   if (!allow.includes(role)) {

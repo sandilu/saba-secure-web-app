@@ -16,38 +16,43 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(myUid())).data;
     }
 
+    /** 
+     * isAdmin: User must be signed in, have a profile,
+     * role must be 'admin', and status must be 'active'.
+     */
     function isAdmin() {
       return signedIn()
         && myProfile() != null
         && myProfile().role == "admin"
-        && (myProfile().status == null || myProfile().status == "active");
+        && myProfile().status == "active";
     }
 
+    /**
+     * isActiveUser: User must be signed in, have a profile,
+     * and status must be exactly 'active'.
+     */
     function isActiveUser() {
       return signedIn()
-        && (myProfile() == null || myProfile().status == null || myProfile().status == "active");
+        && myProfile() != null
+        && myProfile().status == "active";
     }
 
     // ---------------- USERS ----------------
     match /users/{uid} {
-
-      // admin can read all, user can read own
       allow read: if isAdmin() || (signedIn() && uid == myUid());
 
-      // User can create own profile OR admin can create any user
+      // Only admins can create users, OR a new user can create their own profile during signup.
       allow create: if isAdmin() || (signedIn()
         && uid == myUid()
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.role == "staff"
-        && (request.resource.data.status == null || request.resource.data.status == "active"));
+        && request.resource.data.status == "active");
 
-      // Admin can update any user (role/status changes). User can only update own name.
+      // Admin can update any field. User can only update specific non-sensitive fields.
       allow update: if isAdmin() || (signedIn()
         && uid == myUid()
-        && resource.data != null
-        && request.resource.data.email == resource.data.email
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.status == resource.data.status);
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['name', 'displayName', 'photoURL', 'phone', 'updatedAt', 'emailVerified']));
 
       allow delete: if isAdmin();
     }
@@ -55,25 +60,39 @@ service cloud.firestore {
     // ---------------- INVENTORY ITEMS ----------------
     match /inventoryItems/{docId} {
       allow read: if isActiveUser();
-      allow create, update, delete: if isAdmin();
+      
+      allow create, delete: if isAdmin();
+      
+      /**
+       * Staff can update stock levels and sale metadata during sale/return transactions.
+       * They are blocked from editing name, prices, SKUs, or suppliers.
+       */
+      allow update: if isAdmin() || (isActiveUser()
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly([
+              'quantity', 'updatedAt', 'lastSoldAt', 'lastSaleAt',
+              'soldCount', 'totalSold', 'salesCount',
+              'lastSoldByUid', 'lastSoldByEmail',
+              'updatedByUid', 'updatedByEmail',
+              'lastUpdatedBy', 'lastUpdatedByEmail'
+            ])
+        && request.resource.data.quantity >= 0);
     }
 
     // ---------------- DOCUMENTS ----------------
     match /documents/{docId} {
-
-      // admin can read all, owner can read own
       allow read: if isAdmin()
-        || (signedIn() && resource.data.ownerUid == myUid());
+        || (isActiveUser() && resource.data.ownerUid == myUid());
 
-      // Any signed-in user can create a document request tagged with their own uid
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == myUid();
+      allow create: if isActiveUser()
+        && request.resource.data.ownerUid == myUid()
+        && request.resource.data.status == "pending";
 
-      // admin can update any; owner can update own while pending
       allow update: if isAdmin()
-        || (signedIn()
+        || (isActiveUser()
             && resource.data.ownerUid == myUid()
-            && resource.data.status == "pending");
+            && resource.data.status == "pending"
+            && request.resource.data.status == "pending");
 
       allow delete: if isAdmin();
     }
@@ -81,8 +100,10 @@ service cloud.firestore {
     // ---------------- AUDIT LOGS ----------------
     match /auditLogs/{logId} {
       allow read: if isAdmin();
-      allow create: if signedIn()
-        && request.resource.data.performedByUid == myUid();
+      
+      allow create: if isActiveUser()
+        && (request.resource.data.performedByUid == myUid() || request.resource.data.uid == myUid());
+        
       allow update, delete: if false;
     }
 
@@ -96,7 +117,10 @@ service cloud.firestore {
     // ---------------- CUSTOMERS ----------------
     match /customers/{docId} {
       allow read: if isActiveUser();
-      allow create, update, delete: if isAdmin();
+      // Allow staff to create customers during sale checkout
+      allow create: if isActiveUser();
+      // Admin manages existing customers
+      allow update, delete: if isAdmin();
     }
 
     // ---------------- SUPPLIERS ----------------
@@ -107,15 +131,33 @@ service cloud.firestore {
 
     // ---------------- NOTIFICATIONS ----------------
     match /notifications/{docId} {
-      allow read, update, delete: if signedIn();
-      allow create: if signedIn();
+      // Allow broader read for notifications so de-duplication queries in actions work properly.
+      // Privacy is still maintained by targeting, but de-dup checks need to see unread alerts.
+      allow read: if signedIn();
+      
+      allow update: if isAdmin()
+        || (isActiveUser() && (resource.data.targetUid == myUid() || resource.data.uid == myUid())
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'status']));
+
+      allow delete: if isAdmin();
+
+      allow create: if isActiveUser();
     }
 
     // ---------------- LOGIN ACTIVITIES ----------------
     match /loginActivities/{docId} {
       allow read: if isAdmin();
-      allow create: if signedIn();
+      allow create: if isActiveUser();
       allow update, delete: if false;
+    }
+
+    // ---------------- ANOMALY ALERTS ----------------
+    match /anomalyAlerts/{docId} {
+      // Allow read for active users to support de-duplication checks during alert creation.
+      allow read: if isAdmin() || isActiveUser();
+      allow create: if isActiveUser();
+      allow update: if isAdmin();
+      allow delete: if false;
     }
 
     // ---------------- DEFAULT DENY ----------------
