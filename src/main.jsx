@@ -23,6 +23,9 @@ import CustomersPage from "./pages/CustomersPage";
 import SuppliersPage from "./pages/SuppliersPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import LoginActivityPage from "./pages/LoginActivityPage";
+import StaffInventoryPage from "./pages/StaffInventoryPage";
+import StaffMySalesPage from "./pages/StaffMySalesPage";
+import StaffCustomersPage from "./pages/StaffCustomersPage";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
@@ -153,6 +156,39 @@ ReactDOM.createRoot(document.getElementById("root")).render(
                 <ProtectedRoute>
                   <RoleRoute allow={["staff", "admin"]}>
                     <StaffDashboard />
+                  </RoleRoute>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/staff/inventory"
+              element={
+                <ProtectedRoute>
+                  <RoleRoute allow={["staff", "admin"]}>
+                    <StaffInventoryPage />
+                  </RoleRoute>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/staff/my-sales"
+              element={
+                <ProtectedRoute>
+                  <RoleRoute allow={["staff", "admin"]}>
+                    <StaffMySalesPage />
+                  </RoleRoute>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/staff/customers"
+              element={
+                <ProtectedRoute>
+                  <RoleRoute allow={["staff", "admin"]}>
+                    <StaffCustomersPage />
                   </RoleRoute>
                 </ProtectedRoute>
               }

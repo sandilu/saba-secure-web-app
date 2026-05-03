@@ -5,12 +5,16 @@
 
 import { useMemo } from "react";
 
+function cx(...classes) {
+  return classes.filter(Boolean).join(" ");
+}
+
 const fc = (v) => `Rs. ${Number(v || 0).toLocaleString()}`;
 
 // ─── sub-components ─────────────────────────────────────────────────────────
 
 function HealthScoreRing({ score, label }) {
-  const radius = 38;
+  const radius = 40;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
 
@@ -20,128 +24,75 @@ function HealthScoreRing({ score, label }) {
                   "#ef4444";    // red
 
   const badgeColour =
-    label === "Healthy"          ? "bg-emerald-500/20 text-emerald-300 ring-emerald-500/30" :
-    label === "Needs Attention"  ? "bg-amber-500/20  text-amber-300  ring-amber-500/30"  :
-                                   "bg-red-500/20    text-red-300    ring-red-500/30";
+    label === "Healthy"          ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" :
+    label === "Needs Attention"  ? "bg-amber-500/10  text-amber-400  ring-amber-500/20"  :
+                                   "bg-red-500/10    text-red-400    ring-red-500/20";
 
   return (
-    <div className="flex flex-col items-center gap-3">
-      <div className="relative w-24 h-24">
-        <svg className="w-24 h-24 -rotate-90" viewBox="0 0 96 96">
+    <div className="flex flex-col items-center gap-4 group">
+      <div className="relative w-28 h-28">
+        <svg className="w-28 h-28 -rotate-90 drop-shadow-[0_0_8px_rgba(255,255,255,0.05)]" viewBox="0 0 100 100">
           <circle
-            cx="48" cy="48" r={radius}
-            fill="none" stroke="rgba(255,255,255,0.06)"
-            strokeWidth="8"
+            cx="50" cy="50" r={radius}
+            fill="none" stroke="rgba(255,255,255,0.03)"
+            strokeWidth="10"
           />
           <circle
-            cx="48" cy="48" r={radius}
+            cx="50" cy="50" r={radius}
             fill="none" stroke={trackColour}
-            strokeWidth="8"
+            strokeWidth="10"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
             strokeLinecap="round"
-            style={{ transition: "stroke-dashoffset 0.8s ease" }}
+            className="transition-all duration-1000 ease-out"
+            style={{ filter: `drop-shadow(0 0 6px ${trackColour}40)` }}
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-2xl font-bold text-white leading-none">{score}</span>
-          <span className="text-[10px] text-white/50 uppercase tracking-wide">/ 100</span>
+          <span className="text-3xl font-black text-white leading-none tracking-tighter group-hover:scale-110 transition-transform duration-500">{score}</span>
+          <span className="text-[10px] font-black text-white/20 uppercase tracking-widest mt-1">Score</span>
         </div>
       </div>
-      <span className={`text-xs font-bold uppercase tracking-widest px-3 py-1 rounded-full ring-1 ${badgeColour}`}>
+      <span className={cx("text-[9px] font-black uppercase tracking-[0.2em] px-4 py-1.5 rounded-full ring-1 shadow-lg transition-all duration-500", badgeColour)}>
         {label}
       </span>
     </div>
   );
 }
 
-function InsightCard({ title, message, type }) {
-  const styles = {
-    success: "bg-emerald-500/[0.07] ring-emerald-500/20",
-    warning: "bg-amber-500/[0.07]  ring-amber-500/20",
-    info:    "bg-blue-500/[0.07]   ring-blue-500/15",
+function StatusModule({ title, message, type, severity, priority }) {
+  const isInsight = !!type;
+  const isRisk = !!severity;
+  const isAction = !!priority;
+
+  const config = {
+    // Insight types
+    success: { style: "bg-emerald-500/5 ring-emerald-500/10", badge: "bg-emerald-500/10 text-emerald-400", label: "Opportunity", icon: "💎" },
+    warning: { style: "bg-amber-500/5 ring-amber-500/10", badge: "bg-amber-500/10 text-amber-400", label: "Signal", icon: "⚠️" },
+    info:    { style: "bg-blue-500/5 ring-blue-500/10", badge: "bg-blue-500/10 text-blue-400", label: "Analysis", icon: "📡" },
+    // Risk types
+    high:    { style: "bg-red-500/5 ring-red-500/20", badge: "bg-red-500/10 text-red-400", label: "Critical", icon: "🚨" },
+    medium:  { style: "bg-amber-500/5 ring-amber-500/10", badge: "bg-amber-500/10 text-amber-400", label: "Elevated", icon: "🛡️" },
+    low:     { style: "bg-white/[0.02] ring-white/5", badge: "bg-white/10 text-white/40", label: "Nominal", icon: "✅" },
   };
-  const badgeStyles = {
-    success: "bg-emerald-500/20 text-emerald-300",
-    warning: "bg-amber-500/20  text-amber-300",
-    info:    "bg-blue-500/20   text-blue-300",
-  };
-  const icons = { success: "✅", warning: "⚠️", info: "💡" };
+
+  const active = isInsight ? config[type] : isRisk ? config[severity] : config[priority === 'high' ? 'high' : priority === 'medium' ? 'medium' : 'low'];
+  if (!active) return null;
 
   return (
-    <div className={`rounded-2xl ring-1 p-4 ${styles[type] || styles.info}`}>
-      <div className="flex items-start gap-2.5">
-        <span className="text-base shrink-0 mt-0.5">{icons[type] || icons.info}</span>
-        <div>
-          <div className="flex items-center gap-2 flex-wrap mb-1">
-            <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${badgeStyles[type] || badgeStyles.info}`}>
-              {type === "success" ? "Opportunity" : type === "warning" ? "Warning" : "Insight"}
-            </span>
-            <span className="font-semibold text-white text-sm">{title}</span>
-          </div>
-          <p className="text-xs text-white/70 leading-relaxed">{message}</p>
+    <div className={cx("group rounded-[1.5rem] ring-1 p-5 transition-all duration-500 hover:bg-white/[0.04] hover:shadow-xl hover:-translate-y-0.5", active.style)}>
+      <div className="flex items-start gap-4">
+        <div className="h-10 w-10 rounded-2xl bg-white/5 ring-1 ring-white/10 flex items-center justify-center text-lg shadow-inner group-hover:scale-110 transition-transform duration-500">
+          {active.icon}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function RiskCard({ title, message, severity }) {
-  const styles = {
-    high:   "bg-red-500/[0.07]    ring-red-500/20",
-    medium: "bg-amber-500/[0.07]  ring-amber-500/20",
-    low:    "bg-white/[0.04]      ring-white/10",
-  };
-  const badgeStyles = {
-    high:   "bg-red-500/20    text-red-300",
-    medium: "bg-amber-500/20  text-amber-300",
-    low:    "bg-slate-500/20  text-slate-300",
-  };
-  const icons = { high: "🚨", medium: "⚠️", low: "✅" };
-
-  return (
-    <div className={`rounded-2xl ring-1 p-4 ${styles[severity] || styles.low}`}>
-      <div className="flex items-start gap-2.5">
-        <span className="text-base shrink-0 mt-0.5">{icons[severity] || icons.low}</span>
-        <div>
-          <div className="flex items-center gap-2 flex-wrap mb-1">
-            <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${badgeStyles[severity] || badgeStyles.low}`}>
-              {severity === "low" ? "Clear" : severity}
+        <div className="flex-1 min-w-0 pt-0.5">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <span className={cx("text-[8px] font-black uppercase tracking-[0.2em] px-2 py-0.5 rounded-md ring-1", active.badge)}>
+              {active.label}
             </span>
-            <span className="font-semibold text-white text-sm">{title}</span>
           </div>
-          <p className="text-xs text-white/70 leading-relaxed">{message}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ActionCard({ title, message, priority }) {
-  const styles = {
-    high:   "bg-red-500/[0.07]    ring-red-500/20",
-    medium: "bg-indigo-500/[0.07] ring-indigo-500/20",
-    low:    "bg-white/[0.04]      ring-white/10",
-  };
-  const badgeStyles = {
-    high:   "bg-red-500/20    text-red-300",
-    medium: "bg-indigo-500/20 text-indigo-300",
-    low:    "bg-slate-500/20  text-slate-300",
-  };
-  const icons = { high: "🔴", medium: "🔵", low: "⚪" };
-
-  return (
-    <div className={`rounded-2xl ring-1 p-4 ${styles[priority] || styles.low}`}>
-      <div className="flex items-start gap-2.5">
-        <span className="text-base shrink-0 mt-0.5">{icons[priority] || icons.low}</span>
-        <div>
-          <div className="flex items-center gap-2 flex-wrap mb-1">
-            <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${badgeStyles[priority] || badgeStyles.low}`}>
-              {priority} priority
-            </span>
-            <span className="font-semibold text-white text-sm">{title}</span>
-          </div>
-          <p className="text-xs text-white/70 leading-relaxed">{message}</p>
+          <div className="text-sm font-black text-white group-hover:text-white transition-colors">{title}</div>
+          <p className="mt-2 text-[13px] text-white/40 leading-relaxed font-medium group-hover:text-white/60 transition-colors">{message}</p>
         </div>
       </div>
     </div>
@@ -150,34 +101,32 @@ function ActionCard({ title, message, priority }) {
 
 // ─── Section collapsible wrapper ─────────────────────────────────────────────
 
-function SubSection({ title, count, countColour = "bg-indigo-500/20 text-indigo-300", children }) {
+function SubSection({ title, count, icon, children }) {
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm font-semibold text-white/80">{title}</span>
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="flex items-center justify-between mb-6 px-2">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40">{title}</span>
+          <span className="h-px w-8 bg-white/10"></span>
+        </div>
         {count !== undefined && (
-          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${countColour}`}>
+          <span className="text-[10px] font-black text-white/20 bg-white/5 px-2 py-0.5 rounded">
             {count}
           </span>
         )}
       </div>
-      <div className="space-y-2.5">{children}</div>
+      <div className="space-y-4">{children}</div>
     </div>
   );
 }
 
 // ─── Main exported component ─────────────────────────────────────────────────
 
-/**
- * @param {Object} props
- * @param {Object} props.summary   - return value of generateBusinessSummary()
- * @param {boolean} [props.compact] - if true, renders a condensed single-column layout
- */
 export default function AiSummaryPanel({ summary, compact = false }) {
   if (!summary) {
     return (
-      <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-6 text-sm text-white/50">
-        Generating AI Business Summary…
+      <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-10 text-sm text-white/20 italic text-center animate-pulse">
+        Initializing cognitive synthesis protocols...
       </div>
     );
   }
@@ -191,91 +140,79 @@ export default function AiSummaryPanel({ summary, compact = false }) {
     recommendedActions,
   } = summary;
 
-  const highActions  = recommendedActions.filter((a) => a.priority === "high");
-  const medActions   = recommendedActions.filter((a) => a.priority === "medium");
-  const lowActions   = recommendedActions.filter((a) => a.priority === "low");
-
-  const highRisks    = risks.filter((r) => r.severity === "high");
-  const medRisks     = risks.filter((r) => r.severity === "medium");
-  const lowRisks     = risks.filter((r) => r.severity === "low");
+  const sortedRisks = [...risks].sort((a, b) => (a.severity === 'high' ? -1 : 1));
+  const sortedActions = [...recommendedActions].sort((a, b) => (a.priority === 'high' ? -1 : 1));
 
   return (
-    <div className="rounded-3xl bg-gradient-to-br from-indigo-500/[0.06] via-purple-500/[0.04] to-slate-900/0 ring-1 ring-indigo-500/20 p-5 sm:p-7 space-y-8">
+    <div className="rounded-[3rem] bg-gradient-to-br from-indigo-500/[0.08] via-slate-900 to-transparent ring-1 ring-white/10 p-8 sm:p-12 space-y-12 shadow-2xl relative overflow-hidden border border-white/5">
+      
+      {/* Decorative background effects */}
+      <div className="absolute top-0 right-0 h-96 w-96 bg-indigo-500/5 blur-[120px] rounded-full -translate-y-1/2 translate-x-1/2 pointer-events-none" />
+      <div className="absolute bottom-0 left-0 h-96 w-96 bg-purple-500/5 blur-[120px] rounded-full translate-y-1/2 -translate-x-1/2 pointer-events-none" />
 
       {/* ── Header ── */}
-      <div className="flex items-start justify-between gap-6 flex-wrap">
-        <div>
-          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-widest bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full ring-1 ring-indigo-500/30">
-              Level 2 · Step 4
+      <div className="relative z-10 flex items-start justify-between gap-10 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 mb-6">
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] bg-white/5 text-white/50 px-4 py-1.5 rounded-full ring-1 ring-white/10 shadow-inner">
+              Strategic Intelligence Protocol
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-widest bg-purple-500/20 text-purple-300 px-2.5 py-1 rounded-full ring-1 ring-purple-500/30">
-              Rule-Based AI
-            </span>
+            <div className="flex items-center gap-1">
+              <span className="h-1 w-1 rounded-full bg-emerald-400 animate-ping"></span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400/70">Real-time Analysis</span>
+            </div>
           </div>
-          <h2 className="text-xl sm:text-2xl font-bold text-white">AI Business Summary</h2>
-          <p className="mt-1.5 text-sm text-white/60">
-            Generated from live sales, inventory, customer, supplier, and anomaly data.
-          </p>
+          <h2 className="text-4xl sm:text-5xl font-black text-white tracking-tighter leading-none mb-6">
+            Business Health <br/>Synthesis
+          </h2>
+          <div className="max-w-2xl text-[15px] font-medium leading-relaxed text-white/40 italic border-l-2 border-indigo-500/20 pl-6">
+            "{summaryText}"
+          </div>
         </div>
 
         <HealthScoreRing score={healthScore} label={statusLabel} />
       </div>
 
-      {/* ── Business Summary Paragraph ── */}
-      <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-5">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 mb-2">
-          Executive Summary
-        </div>
-        <p className="text-sm text-white/80 leading-relaxed">{summaryText}</p>
-      </div>
-
-      {/* ── Key Insights / Risks / Actions ── */}
-      <div className={compact ? "space-y-8" : "grid gap-8 xl:grid-cols-3"}>
-
+      {/* ── Analytical Grid ── */}
+      <div className={cx("relative z-10 grid gap-10", compact ? "grid-cols-1" : "xl:grid-cols-3")}>
+        
         {/* Key Insights */}
-        <div className="space-y-3">
-          <SubSection
-            title="Key Insights"
-            count={keyInsights.length}
-            countColour="bg-blue-500/20 text-blue-300"
-          >
-            {keyInsights.map((ins, i) => (
-              <InsightCard key={i} {...ins} />
-            ))}
-          </SubSection>
-        </div>
+        <SubSection title="Insight telemetry" count={keyInsights.length}>
+          {keyInsights.map((ins, i) => (
+            <StatusModule key={i} {...ins} />
+          ))}
+        </SubSection>
 
-        {/* Risk Summary */}
-        <div className="space-y-3">
-          <SubSection
-            title="Risk Summary"
-            count={risks.filter((r) => r.severity !== "low").length + " issues"}
-            countColour={highRisks.length > 0 ? "bg-red-500/20 text-red-300" : "bg-amber-500/20 text-amber-300"}
-          >
-            {highRisks.map((r, i)  => <RiskCard key={`h${i}`} {...r} />)}
-            {medRisks.map((r, i)   => <RiskCard key={`m${i}`} {...r} />)}
-            {lowRisks.map((r, i)   => <RiskCard key={`l${i}`} {...r} />)}
-          </SubSection>
-        </div>
+        {/* Risk Assessment */}
+        <SubSection title="Threat matrix" count={risks.length}>
+          {sortedRisks.map((r, i) => (
+            <StatusModule key={i} {...r} />
+          ))}
+        </SubSection>
 
-        {/* Recommended Actions */}
-        <div className="space-y-3">
-          <SubSection
-            title="Recommended Actions"
-            count={recommendedActions.length}
-            countColour={highActions.length > 0 ? "bg-red-500/20 text-red-300" : "bg-indigo-500/20 text-indigo-300"}
-          >
-            {highActions.map((a, i)  => <ActionCard key={`h${i}`} {...a} />)}
-            {medActions.map((a, i)   => <ActionCard key={`m${i}`} {...a} />)}
-            {lowActions.map((a, i)   => <ActionCard key={`l${i}`} {...a} />)}
-          </SubSection>
-        </div>
+        {/* Operational Directives */}
+        <SubSection title="Active directives" count={recommendedActions.length}>
+          {sortedActions.map((a, i) => (
+            <StatusModule key={i} {...a} />
+          ))}
+        </SubSection>
       </div>
 
-      {/* ── Footer note ── */}
-      <div className="text-[11px] text-white/30 border-t border-white/10 pt-4">
-        This summary is generated by rule-based analysis of live Firestore data. It does not use an external AI API and requires no additional cost or configuration.
+      {/* ── Footer ── */}
+      <div className="relative z-10 flex flex-col sm:flex-row items-center justify-between gap-6 pt-10 border-t border-white/5">
+        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+          Cognitive Logic Engine v2.0 · Automated Strategic Audit
+        </div>
+        <div className="flex items-center gap-4 text-[10px] font-bold text-white/30">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-white/5 ring-1 ring-white/10" />
+            Zero External API Costs
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-white/5 ring-1 ring-white/10" />
+            100% Privacy Compliant
+          </div>
+        </div>
       </div>
     </div>
   );

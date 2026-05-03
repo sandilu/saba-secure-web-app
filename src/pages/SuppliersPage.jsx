@@ -439,59 +439,77 @@ export default function SuppliersPage() {
                   <Pill>{filteredSuppliers.length} Records</Pill>
                 </div>
 
-                <div className="overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                  <table className="min-w-[640px] w-full text-sm">
-                    <thead className="bg-white/5 text-white/70">
-                      <tr>
-                        <th className="text-left font-semibold px-4 py-3">Supplier</th>
-                        <th className="text-left font-semibold px-4 py-3">Contact</th>
-                        <th className="text-right font-semibold px-4 py-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/10">
-                      {loading ? (
-                        <tr><td className="px-4 py-4 text-white/70" colSpan={3}>Loading...</td></tr>
-                      ) : filteredSuppliers.length === 0 ? (
-                        <tr><td className="px-4 py-4 text-white/70" colSpan={3}>No suppliers found.</td></tr>
-                      ) : (
-                        filteredSuppliers.map((c) => (
-                          <tr key={c.id} className="text-white/85 align-top">
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-white">{c.name}</div>
-                              {c.category && <div className="text-xs text-white/50">{c.category}</div>}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="text-white/90">{c.contactPerson || "–"}</div>
-                              <div>{c.email || "–"}</div>
-                              <div className="text-xs text-white/50">{c.phone || "–"}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex justify-end gap-2">
-                                <button
-                                  onClick={() => setReorderSupplier(c)}
-                                  className="rounded-xl bg-amber-500/15 ring-1 ring-amber-500/25 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/25 transition"
-                                >
-                                  📦 Items
-                                </button>
-                                <button
-                                  onClick={() => startEdit(c)}
-                                  className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  onClick={() => onDelete(c)}
-                                  className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20"
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                <div className="mt-5 space-y-3">
+                  {loading ? (
+                    <div className="py-12 text-center text-white/50 flex flex-col items-center bg-white/[0.02] rounded-[2rem] ring-1 ring-white/5 shadow-inner">
+                      <span className="h-8 w-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin mb-4"></span>
+                      <span className="text-[10px] font-black uppercase tracking-[0.2em]">Loading Database...</span>
+                    </div>
+                  ) : filteredSuppliers.length === 0 ? (
+                    <div className="py-12 text-center text-white/40 italic bg-white/[0.02] rounded-[2rem] ring-1 ring-white/5 shadow-inner flex flex-col items-center">
+                      <span className="text-4xl mb-4 opacity-20">📭</span>
+                      <span className="text-sm font-medium">No suppliers found.</span>
+                    </div>
+                  ) : (
+                    filteredSuppliers.map((c) => (
+                      <div 
+                        key={c.id} 
+                        className="bg-white/[0.02] ring-1 ring-white/10 p-5 rounded-[2rem] transition-all duration-300 hover:bg-white/[0.04] hover:shadow-xl hover:-translate-y-0.5 border border-white/5 flex flex-col md:flex-row gap-5 justify-between items-start md:items-center group"
+                      >
+                        <div className="flex-1 min-w-0 w-full">
+                          <div className="flex items-center gap-3 mb-1.5">
+                            <span className="font-black text-white text-base truncate">{c.name}</span>
+                            {c.category && (
+                              <span className="text-[9px] font-black uppercase tracking-widest text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-md ring-1 ring-indigo-500/20 shrink-0">
+                                {c.category}
+                              </span>
+                            )}
+                          </div>
+                          
+                          <div className="flex flex-wrap items-center gap-4 text-xs text-white/50 bg-white/5 rounded-xl px-3 py-2 w-fit ring-1 ring-white/5">
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-[10px] opacity-50">👤</span>
+                              <span className="font-semibold text-white/70">{c.contactPerson || "No Contact"}</span>
+                            </span>
+                            {(c.phone || c.email) && <span className="w-px h-3 bg-white/10 shrink-0 hidden sm:block"></span>}
+                            {c.phone && (
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                <span className="text-[10px] opacity-50">📞</span>
+                                <span className="font-medium text-white/60">{c.phone}</span>
+                              </span>
+                            )}
+                            {c.email && (
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                <span className="text-[10px] opacity-50">✉</span>
+                                <span className="font-medium text-white/60 truncate max-w-[150px]">{c.email}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-row flex-nowrap items-center gap-2 w-full md:w-auto shrink-0 pt-2 md:pt-0 border-t border-white/5 md:border-none justify-start md:justify-end">
+                          <button 
+                            onClick={() => setReorderSupplier(c)} 
+                            className="h-9 px-4 rounded-xl bg-amber-500/10 ring-1 ring-amber-500/30 text-amber-400 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-amber-500/20 transition-all active:scale-95 shrink-0"
+                          >
+                            📦 Items
+                          </button>
+                          <button 
+                            onClick={() => startEdit(c)} 
+                            className="h-9 px-4 rounded-xl bg-white/10 ring-1 ring-white/20 text-white text-[10px] font-black uppercase tracking-[0.2em] hover:bg-white/20 transition-all active:scale-95 shrink-0"
+                          >
+                            Edit
+                          </button>
+                          <button 
+                            onClick={() => onDelete(c)} 
+                            className="h-9 px-4 rounded-xl bg-red-500/10 ring-1 ring-red-500/30 text-red-400 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-red-500/20 transition-all active:scale-95 shrink-0"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>

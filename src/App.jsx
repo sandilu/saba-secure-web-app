@@ -86,6 +86,14 @@ export default function AppLayout() {
                   </>
                 )}
 
+                {role === "staff" && (
+                  <>
+                    <NavItem to="/staff/my-sales" label="My Sales" />
+                    <NavItem to="/staff/inventory" label="Inventory" />
+                    <NavItem to="/staff/customers" label="Customers" />
+                  </>
+                )}
+
                 {role === "admin" && (
                   <>
                     <NavItem to="/customers" label="Customers" />
@@ -113,7 +121,12 @@ export default function AppLayout() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:py-10">
-        <Outlet />
+        <div 
+          key={useLocation().pathname} 
+          className="animate-in fade-in zoom-in-[0.98] slide-in-from-bottom-4 duration-500 ease-out fill-mode-both"
+        >
+          <Outlet />
+        </div>
       </main>
 
       <footer className="border-t border-white/10">

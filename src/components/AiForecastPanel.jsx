@@ -2,6 +2,10 @@ import { Card, Pill } from "../ui/Layout";
 
 const fc = (v) => `Rs. ${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
+function cx(...classes) {
+  return classes.filter(Boolean).join(" ");
+}
+
 /**
  * AiForecastPanel Component
  * Displays the sales forecast analytics in a professional UI.
@@ -9,7 +13,7 @@ const fc = (v) => `Rs. ${Number(v || 0).toLocaleString(undefined, { maximumFract
  * @param {Object} props
  * @param {Object} props.forecast - The forecast data object from generateSalesForecast
  */
-export default function AiForecastPanel({ forecast }) {
+export default function AiForecastPanel({ forecast, compact = false }) {
   if (!forecast) return null;
 
   const {
@@ -26,43 +30,47 @@ export default function AiForecastPanel({ forecast }) {
   const confidenceColor = confidence === "High" ? "text-emerald-400" : confidence === "Medium" ? "text-amber-400" : "text-red-400";
 
   return (
-    <div className="mt-8 rounded-3xl bg-white/[0.03] ring-1 ring-white/10 p-6 border border-white/5 shadow-2xl">
+    <div className="rounded-3xl bg-white/[0.03] ring-1 ring-white/10 p-6 border border-white/5 shadow-2xl">
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Pill>AI Analytics</Pill>
-            <span className="text-xs text-white/40">Rule-based statistical model</span>
+            {!compact && <span className="text-xs text-white/40">Rule-based statistical model</span>}
           </div>
-          <h2 className="text-xl font-semibold text-white">Sales & Inventory Forecasting</h2>
+          <h2 className={compact ? "text-lg font-bold text-white" : "text-xl font-semibold text-white"}>
+            Sales & Inventory Forecasting
+          </h2>
         </div>
-        <div className="text-right">
-          <div className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">Forecast Confidence</div>
-          <div className={`text-sm font-bold ${confidenceColor}`}>{confidence}</div>
-        </div>
+        {!compact && (
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">Forecast Confidence</div>
+            <div className={`text-sm font-bold ${confidenceColor}`}>{confidence}</div>
+          </div>
+        )}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={cx("grid gap-4", compact ? "grid-cols-2" : "grid-cols-2 lg:grid-cols-4")}>
         <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 transition hover:bg-white/[0.08]">
-          <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Next 7 Days Est.</div>
-          <div className="text-lg font-semibold text-white">{fc(next7DaysRevenue)}</div>
+          <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Next 7 Days</div>
+          <div className="text-base font-semibold text-white">{fc(next7DaysRevenue)}</div>
         </div>
         <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 transition hover:bg-white/[0.08]">
-          <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Next 30 Days Est.</div>
-          <div className="text-lg font-semibold text-white">{fc(next30DaysRevenue)}</div>
+          <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Next 30 Days</div>
+          <div className="text-base font-semibold text-white">{fc(next30DaysRevenue)}</div>
         </div>
         <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 transition hover:bg-white/[0.08]">
           <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Sales Trend</div>
-          <div className={`text-lg font-semibold ${trendColor}`}>{trend}</div>
+          <div className={`text-base font-semibold ${trendColor}`}>{trend}</div>
         </div>
         <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 transition hover:bg-white/[0.08]">
-          <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Predicted Top Item</div>
-          <div className="text-lg font-semibold text-indigo-300 truncate" title={predictedTopItem}>
-            {predictedTopItem === "Insufficient Data" ? <span className="text-white/30 text-sm italic">Insufficient Data</span> : predictedTopItem}
+          <div className="text-[10px] uppercase tracking-widest text-white/40 font-bold mb-1">Top Item</div>
+          <div className="text-base font-semibold text-indigo-300 truncate" title={predictedTopItem}>
+            {predictedTopItem === "Insufficient Data" ? <span className="text-white/30 text-xs italic">Insufficient</span> : predictedTopItem}
           </div>
         </div>
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
+      <div className={cx("mt-8 grid gap-6", compact ? "grid-cols-1" : "lg:grid-cols-2")}>
         {/* Reorder Risks */}
         <div>
           <h3 className="text-sm font-semibold text-white/90 mb-4 flex items-center gap-2">

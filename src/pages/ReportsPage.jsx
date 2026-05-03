@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getSales } from "../firebase/salesActions";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/firebaseServices";
-import { PageShell, Pill, Card, SecondaryButton, Select } from "../ui/Layout";
+import { PageShell, Pill, Card, PrimaryButton, SecondaryButton, Select } from "../ui/Layout";
 import { getDateRangeBoundaries, isDateInRange } from "../utils/dateHelpers";
 import { getSaleItems, getSaleTotal, getSaleSubtotal, getSaleQuantity, getSaleItemSummary } from "../utils/saleHelpers";
 import { getAnomalyAlerts } from "../firebase/anomalyActions";
@@ -10,8 +10,74 @@ import { generateBusinessSummary } from "../utils/aiSummaryRules";
 import { generateSalesForecast } from "../utils/aiForecast";
 import AiSummaryPanel from "../components/AiSummaryPanel";
 import AiForecastPanel from "../components/AiForecastPanel";
+import MeasuredChartFrame from "../components/MeasuredChartFrame";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  PieChart,
+  Pie,
+  Cell,
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+} from "recharts";
+
+const cx = (...classes) => classes.filter(Boolean).join(" ");
+
+function SectionTitle({ eyebrow, title, pill }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30">{eyebrow}</div>
+        <div className="mt-1 text-2xl font-black text-white tracking-tight">{title}</div>
+      </div>
+      {pill ? <Pill className="!bg-white/5 !text-white/40">{pill}</Pill> : null}
+    </div>
+  );
+}
+
+function MetricCard({ label, value, sub, icon, color = "indigo", alert = false }) {
+  const colors = {
+    indigo: "from-indigo-500/20 to-indigo-500/5 text-indigo-400 ring-indigo-500/20",
+    amber: "from-amber-500/20 to-amber-500/5 text-amber-400 ring-amber-500/20",
+    emerald: "from-emerald-500/20 to-emerald-500/5 text-emerald-400 ring-emerald-500/20",
+    purple: "from-purple-500/20 to-purple-500/5 text-purple-400 ring-purple-500/20",
+    blue: "from-blue-500/20 to-blue-500/5 text-blue-400 ring-blue-500/20",
+    red: "from-red-500/20 to-red-500/5 text-red-400 ring-red-500/20",
+  };
+  const selectedColor = colors[color] || colors.indigo;
+  return (
+    <div className={cx(
+      "relative overflow-hidden rounded-3xl bg-white/[0.03] p-6 sm:p-8 ring-1 transition-all duration-500 group hover:bg-white/[0.05]",
+      selectedColor,
+      alert && "shadow-[0_0_30px_rgba(245,158,11,0.1)]"
+    )}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-50 mb-2">{label}</div>
+          <div className="text-3xl font-black tracking-tight text-white mb-1 group-hover:scale-105 transition-transform origin-left duration-500">
+            {value}
+          </div>
+          {sub && <div className="text-[10px] font-bold opacity-40 uppercase tracking-widest">{sub}</div>}
+        </div>
+        {icon && (
+          <div className="h-10 w-10 rounded-2xl bg-white/5 ring-1 ring-white/10 flex items-center justify-center text-xl shadow-inner group-hover:rotate-12 transition-transform duration-500">
+            {icon}
+          </div>
+        )}
+      </div>
+      <div className="absolute -bottom-10 -right-10 h-32 w-32 bg-current opacity-[0.03] blur-[40px] pointer-events-none" />
+    </div>
+  );
+}
 
 function downloadCsv(filename, rows) {
   const process = rows.map((row) =>
@@ -81,6 +147,7 @@ function StatusBadge({ status }) {
 }
 
 export default function ReportsPage() {
+  const [activeTab, setActiveTab] = useState("overview");
   const [sales, setSales] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [users, setUsers] = useState([]);
@@ -211,6 +278,27 @@ export default function ReportsPage() {
       activeUsers, pendingDocuments,
     };
   }, [filteredSales, inventory, users, documents]);
+
+  const chartData = useMemo(() => {
+    // Revenue over time (Daily for current period)
+    const dayMap = {};
+    for (const s of filteredSales) {
+      if (s.status === "cancelled") continue;
+      const date = s.soldAt?.toDate ? s.soldAt.toDate().toLocaleDateString() : new Date(s.soldAt ?? 0).toLocaleDateString();
+      dayMap[date] = (dayMap[date] || 0) + getSaleTotal(s);
+    }
+    const salesOverTime = Object.entries(dayMap).map(([date, value]) => ({ date, value })).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+    // Category Distribution
+    const catMap = {};
+    for (const item of inventory) {
+      const cat = item.category || "Uncategorized";
+      catMap[cat] = (catMap[cat] || 0) + 1;
+    }
+    const categoryDist = Object.entries(catMap).map(([name, value]) => ({ name, value }));
+
+    return { salesOverTime, categoryDist };
+  }, [filteredSales, inventory]);
 
   const salesForecast = useMemo(() => {
     return generateSalesForecast({ sales, inventory });
@@ -1153,564 +1241,575 @@ export default function ReportsPage() {
   };
 
   return (
-    <PageShell
-      right={
-        <div className="space-y-3">
-          <Pill>Reports Summary</Pill>
-          <Card title="Total Sales" desc={String(summary.totalSales - summary.cancelledSalesCount)} />
-          <Card title="Total Revenue" desc={formatCurrency(summary.totalRevenue)} />
-          <Card title="Units Sold" desc={String(summary.totalUnitsSold)} />
-          <div className="grid grid-cols-2 gap-3">
-            <Card title="Cancelled" desc={String(summary.cancelledSalesCount)} />
-            <Card title="Returns" desc={String(summary.returnedSalesCount)} />
-          </div>
-          {summary.totalRefundAmount > 0 && (
-            <Card title="Total Refunds" desc={formatCurrency(summary.totalRefundAmount)} />
-          )}
-          <Card title="Low Stock Items" desc={String(summary.lowStockCount)} />
-          <Card title="Users" desc={String(summary.usersCount)} />
-          <Card title="Pending Docs" desc={String(summary.pendingDocuments)} />
-          <Card title="Anomaly Alerts" desc={String(anomalyAlerts.length)} />
-        </div>
-      }
-    >
-      <div className="max-w-5xl">
-        <Pill>Reports & Testing</Pill>
-
-        <h1 className="mt-3 text-2xl sm:text-3xl font-semibold text-white">
-          Business Reports and Testing Evidence
-        </h1>
-
-        <div className="mt-2 text-sm text-white/70 flex flex-wrap items-center justify-between gap-4">
-          <p>Export business reports and review functional and security testing evidence for the system.</p>
-          <div className="w-full sm:w-64">
-            <Select value={dateRange} onChange={(e) => setDateRange(e.target.value)}>
-              <option value="all_time">All Time</option>
-              <option value="today">Today</option>
-              <option value="this_week">This Week</option>
-              <option value="this_month">This Month</option>
-            </Select>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Card title={String(summary.totalSales)} desc="Recorded sales transactions" />
-          <Card title={formatCurrency(summary.totalRevenue)} desc="Total sales revenue" />
-          <Card title={formatCurrency(summary.totalProfit)} desc="Total estimated profit" />
-          <Card title={String(summary.lowStockCount)} desc="Low stock items detected" />
-        </div>
-
-        <div className="mt-8">
-          <SectionHeader
-            title="Business Exports"
-            pillText={loading ? "Loading..." : "Ready"}
-            subtitle=""
-          />
-
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <ExportCard
-              title="Sales Report"
-              description="Export all recorded sales as CSV or PDF for review and analysis."
-              actions={
-                <>
-                  <SecondaryButton type="button" onClick={exportSalesCsv}>
-                    Export Sales CSV
-                  </SecondaryButton>
-                  <SecondaryButton type="button" onClick={exportSalesPdf}>
-                    Export Sales PDF
-                  </SecondaryButton>
-                </>
-              }
+    <PageShell>
+      <div className="flex flex-col gap-10">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
+          <div>
+            <SectionTitle
+              eyebrow="Business Intelligence"
+              title="Strategic Intelligence Registry"
+              pill={loading ? "Synchronizing..." : "Real-time Telemetry"}
             />
+            <p className="mt-3 text-sm font-medium text-white/40 max-w-2xl leading-relaxed">
+              Synthesizing cross-collection data into actionable insights, functional evidence, and security monitoring alerts.
+            </p>
+          </div>
 
-            <ExportCard
-              title="Low Stock Report"
-              description="Export all low stock inventory items as CSV or PDF for replenishment planning."
-              actions={
-                <>
-                  <SecondaryButton type="button" onClick={exportLowStockCsv}>
-                    Export Low Stock CSV
-                  </SecondaryButton>
-                  <SecondaryButton type="button" onClick={exportLowStockPdf}>
-                    Export Low Stock PDF
-                  </SecondaryButton>
-                </>
-              }
-            />
+          <div className="flex items-center gap-4">
+            <div className="w-48">
+              <Select value={dateRange} onChange={(e) => setDateRange(e.target.value)} className="!py-3 !text-[10px] font-black uppercase tracking-widest bg-white/5 ring-1 ring-white/10">
+                <option value="all_time">All Time Horizon</option>
+                <option value="today">Current Cycle (Today)</option>
+                <option value="this_week">Weekly Interval</option>
+                <option value="this_month">Monthly Interval</option>
+              </Select>
+            </div>
           </div>
         </div>
 
-        {/* Level 1 Completion Evidence */}
-        <div className="mt-8 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-indigo-500/10 ring-1 ring-emerald-500/20 p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Pill>Level 1 Completion</Pill>
-            <span className="text-xs text-emerald-300 font-semibold">All features implemented ✓</span>
-          </div>
-          <h2 className="text-base font-semibold text-white mb-4">Level 1 Evidence Checklist</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2 text-sm">
-            {[
-              "Risky admin action confirmation (ConfirmModal)",
-              "Login activity history (LoginActivityPage)",
-              "Bulk inventory CSV import",
-              "Invoice printing and PDF export",
-              "Profit analysis in Reports",
-              "Dead stock / slow-moving stock detection",
-              "Reorder prediction / low stock alerts",
-              "Document approval history with reviewer details",
-              "Customer-linked sales (customerId saved)",
-              "Multi-item cart invoice (items[] array)",
-              "Smart discount suggestions (milestone rules)",
-              "Manual discount override always available",
-              "Supplier reorder support in Suppliers page",
-              "Audit trail coverage for all sensitive actions",
-              "Notification center with real-time alerts",
-            ].map((item) => (
-              <div key={item} className="flex items-start gap-2 rounded-xl bg-white/5 ring-1 ring-white/10 px-3 py-2">
-                <span className="text-emerald-400 shrink-0 mt-0.5">✅</span>
-                <span className="text-white/80 text-xs leading-relaxed">{item}</span>
+        {/* Tab Navigation */}
+        <div className="flex flex-wrap gap-2 p-1.5 rounded-[2rem] bg-white/[0.03] ring-1 ring-white/10 w-fit">
+          {[
+            { id: "overview", label: "Executive Overview", icon: "📊" },
+            { id: "intelligence", label: "Operational Intelligence", icon: "🧠" },
+            { id: "evidence", label: "Verification Evidence", icon: "🛡️" },
+            { id: "anomalies", label: "Security Anomalies", icon: "🚨" },
+            { id: "exports", label: "Data Extraction", icon: "📥" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cx(
+                "px-6 py-3 rounded-[1.5rem] text-[10px] font-black uppercase tracking-[0.2em] transition-all duration-300 flex items-center gap-2",
+                activeTab === tab.id
+                  ? "bg-white text-slate-950 shadow-xl"
+                  : "text-white/40 hover:text-white hover:bg-white/5"
+              )}
+            >
+              <span>{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "overview" && (
+          <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricCard 
+                label="Aggregate Revenue" 
+                value={formatCurrency(summary.totalRevenue)} 
+                sub="Net finalized sales" 
+                color="indigo" 
+                icon="💰"
+              />
+              <MetricCard 
+                label="Synthesized Profit" 
+                value={formatCurrency(summary.totalProfit)} 
+                sub="Estimated net margin" 
+                color="emerald" 
+                icon="📈"
+              />
+              <MetricCard 
+                label="Operational Sales" 
+                value={summary.totalSales} 
+                sub="Transaction volume" 
+                color="blue" 
+                icon="🛒"
+              />
+              <MetricCard 
+                label="Resource Velocity" 
+                value={summary.totalUnitsSold} 
+                sub="Inventory units cleared" 
+                color="purple" 
+                icon="📦"
+              />
+            </div>
+
+            {/* AI Summary - Full Width for impact */}
+            <AiSummaryPanel summary={aiSummary} />
+
+            <div className="grid gap-10 lg:grid-cols-12">
+              <div className="lg:col-span-8 flex flex-col gap-6">
+                <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40 mb-8">Revenue Trajectory</div>
+                  <div className="h-[350px] w-full">
+                    <MeasuredChartFrame height={350}>
+                      {({ width, height }) => (
+                        <AreaChart width={width} height={height} data={chartData.salesOverTime}>
+                          <defs>
+                            <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#818cf8" stopOpacity={0.3}/>
+                              <stop offset="95%" stopColor="#818cf8" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
+                          <XAxis 
+                            dataKey="date" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: 'bold' }}
+                            dy={10}
+                          />
+                          <YAxis 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: 'bold' }}
+                            tickFormatter={(val) => `Rs.${val/1000}k`}
+                          />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1rem', fontSize: '12px' }}
+                            itemStyle={{ color: '#fff', fontWeight: 'bold' }}
+                          />
+                          <Area type="monotone" dataKey="value" stroke="#818cf8" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
+                        </AreaChart>
+                      )}
+                    </MeasuredChartFrame>
+                  </div>
+                </div>
+
+                {/* Moved AI Forecast Panel to the left column to fill the empty space */}
+                <div className="mt-4">
+                  <AiForecastPanel forecast={salesForecast} />
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
 
-        {/* Level 2 Completion Evidence */}
-        <div className="mt-8 rounded-2xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 ring-1 ring-purple-500/20 p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Pill>Level 2 Completion</Pill>
-            <span className="text-xs text-purple-300 font-semibold">Business Intelligence ✓</span>
-          </div>
-          <h2 className="text-base font-semibold text-white mb-4">Level 2 Evidence Checklist</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2 text-sm">
-            {[
-              "Business intelligence reports",
-              "Top customer analytics",
-              "Supplier reorder intelligence",
-              "Profit by item analytics",
-              "Discount intelligence",
-              "Multi-item invoice analytics",
-              "Customer purchase history",
-              "Reorder notifications with supplier details",
-              "Dashboard decision-support signals",
-              "Level 2 testing evidence",
-              "Audit coverage for Level 2 actions",
-              "CSV exports for Level 2 reports",
-              "Suspicious action alerts & anomaly detection",
-              "High discount detection (≥15%)",
-              "Large sale anomaly detection (≥Rs.100k)",
-              "Repeated return / cancellation detection",
-              "Risky admin activity monitoring",
-            ].map((item) => (
-              <div key={item} className="flex items-start gap-2 rounded-xl bg-white/5 ring-1 ring-white/10 px-3 py-2">
-                <span className="text-purple-400 shrink-0 mt-0.5">✅</span>
-                <span className="text-white/80 text-xs leading-relaxed">{item}</span>
+              <div className="lg:col-span-4 flex flex-col gap-6">
+                <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40 mb-8">Category Allocation</div>
+                  <div className="h-[250px] w-full">
+                    <MeasuredChartFrame height={250}>
+                      {({ width, height }) => {
+                        const outer = Math.max(60, Math.min(width, height) / 3);
+                        const inner = Math.max(40, outer - 20);
+                        return (
+                          <PieChart width={width} height={height}>
+                            <Pie
+                              data={chartData.categoryDist}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={inner}
+                              outerRadius={outer}
+                              paddingAngle={8}
+                              dataKey="value"
+                            >
+                              {chartData.categoryDist.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={['#818cf8', '#6366f1', '#4f46e5', '#4338ca', '#3730a3'][index % 5]} />
+                              ))}
+                            </Pie>
+                            <Tooltip 
+                              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1rem', fontSize: '10px' }}
+                            />
+                          </PieChart>
+                        );
+                      }}
+                    </MeasuredChartFrame>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {chartData.categoryDist.slice(0, 4).map((c, i) => (
+                      <div key={c.name} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: ['#818cf8', '#6366f1', '#4f46e5', '#4338ca'][i % 4] }} />
+                          <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{c.name}</div>
+                        </div>
+                        <div className="text-[10px] font-black text-white">{c.value} Items</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[2.5rem] bg-indigo-500/10 ring-1 ring-indigo-500/20 p-8 sm:p-10 border border-indigo-500/10 shadow-2xl">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-indigo-400 mb-6">Strategic Summary</div>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-bold text-white/50">Total Assets</div>
+                      <div className="text-sm font-black text-white">{summary.inventoryCount}</div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-bold text-white/50">Active Personnel</div>
+                      <div className="text-sm font-black text-white">{summary.activeUsers}</div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-bold text-white/50">Pending Clearances</div>
+                      <div className="text-sm font-black text-white">{summary.pendingDocuments}</div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-bold text-white/50">Security Anomalies</div>
+                      <div className="text-sm font-black text-red-400">{anomalyAlerts.length}</div>
+                    </div>
+                  </div>
+                </div>
               </div>
-            ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Level 2 Business Intelligence */}
-        <div className="mt-10">
-          <SectionHeader
-            title="Level 2 Business Intelligence"
-            pillText="Analytics"
-            subtitle="This section demonstrates business intelligence by combining sales, inventory, customer, supplier, and audit data into decision-support reports."
-          />
+        {activeTab === "intelligence" && (
+          <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-10 lg:grid-cols-2">
+              <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+                <SectionTitle eyebrow="Profitability" title="Revenue Matrix" pill="Top Items" />
+                <div className="overflow-x-auto mt-8">
+                  <table className="w-full text-left border-separate border-spacing-y-2">
+                    <thead>
+                      <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                        <th className="px-6 py-4">Asset</th>
+                        <th className="px-4 py-4 text-right">Units</th>
+                        <th className="px-6 py-4 text-right">Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {level2Intelligence.profitByItem.slice(0, 8).map((p) => (
+                        <tr key={p.id} className="group hover:bg-white/[0.02] transition-colors">
+                          <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors text-[13px] font-black text-white">
+                            {p.itemName}
+                          </td>
+                          <td className="px-4 py-4 text-right bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-bold text-white/40">
+                            {p.unitsSold}
+                          </td>
+                          <td className="px-6 py-4 text-right bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors text-[13px] font-black text-emerald-400">
+                            {formatCurrency(p.estimatedProfit)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Card title={formatCurrency(summary.totalRevenue)} desc="Total Sales Revenue" />
-            <Card title={formatCurrency(summary.totalProfit)} desc="Total Estimated Profit" />
-            <Card title={String(summary.totalUnitsSold)} desc="Total Units Sold" />
-            <Card title={String(customers.length)} desc="Total Customers" />
-            <Card title={String(level2Intelligence.highValueCount)} desc="High Value Customers" />
-            <Card title={String(suppliers.length)} desc="Total Suppliers" />
-            <Card title={String(summary.lowStockCount)} desc="Low Stock Items" />
-            <Card title={String(level2Intelligence.slowMovingItems)} desc="Dead / Slow-Moving Items" />
-            <Card title={String(level2Intelligence.reorderNeededItems)} desc="Reorder Needed Items" />
-          </div>
+              <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+                <SectionTitle eyebrow="Loyalty" title="Client Synthesis" pill="High Value" />
+                <div className="overflow-x-auto mt-8">
+                  <table className="w-full text-left border-separate border-spacing-y-2">
+                    <thead>
+                      <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                        <th className="px-6 py-4">Identity</th>
+                        <th className="px-4 py-4 text-right">Volume</th>
+                        <th className="px-6 py-4 text-right">Lifetime Spent</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {level2Intelligence.topCustomers.slice(0, 8).map((c) => (
+                        <tr key={c.id} className="group hover:bg-white/[0.02] transition-colors">
+                          <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                            <div className="text-[13px] font-black text-white">{c.name}</div>
+                            <div className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mt-1">{c.status}</div>
+                          </td>
+                          <td className="px-4 py-4 text-right bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-bold text-white/40">
+                            {c.purchaseCount}
+                          </td>
+                          <td className="px-6 py-4 text-right bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors text-[13px] font-black text-white">
+                            {formatCurrency(c.totalSpent)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
 
-          <AiForecastPanel forecast={salesForecast} />
-
-          <div className="mt-8 flex flex-wrap gap-3">
-            <SecondaryButton type="button" onClick={exportTopCustomersCsv}>Export Top Customers CSV</SecondaryButton>
-            <SecondaryButton type="button" onClick={exportReorderIntelligenceCsv}>Export Reorder Intelligence CSV</SecondaryButton>
-            <SecondaryButton type="button" onClick={exportProfitByItemCsv}>Export Profit by Item CSV</SecondaryButton>
-            <SecondaryButton type="button" onClick={exportDiscountIntelligenceCsv}>Export Discount Intelligence CSV</SecondaryButton>
-          </div>
-
-          {/* Top Customers Table */}
-          <div className="mt-6 rounded-2xl bg-white/5 ring-1 ring-white/10 overflow-hidden">
-            <div className="px-4 py-3 bg-white/5 text-sm font-semibold text-white/90">Top Customers</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-white/80 min-w-[700px]">
-                <thead className="bg-white/5 text-white/60">
-                  <tr>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3 text-right">Purchases</th>
-                    <th className="px-4 py-3 text-right">Units Bought</th>
-                    <th className="px-4 py-3 text-right">Total Spent</th>
-                    <th className="px-4 py-3 text-right">Last Purchase</th>
-                    <th className="px-4 py-3 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {level2Intelligence.topCustomers.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-4 text-center text-white/40">No customer data</td></tr>
-                  ) : level2Intelligence.topCustomers.map(c => (
-                    <tr key={c.id} className="border-t border-white/10 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-medium">{c.name}</td>
-                      <td className="px-4 py-3 text-right">{c.purchaseCount}</td>
-                      <td className="px-4 py-3 text-right">{c.unitsBought}</td>
-                      <td className="px-4 py-3 text-right text-emerald-300 font-medium">{formatCurrency(c.totalSpent)}</td>
-                      <td className="px-4 py-3 text-right text-white/50">{c.lastPurchase ? c.lastPurchase.toLocaleDateString() : "—"}</td>
-                      <td className="px-4 py-3 text-center">
-                        {c.status === "Premium Customer" ? <span className="inline-flex items-center rounded-full bg-purple-500/15 text-purple-300 text-xs font-semibold px-2 py-1 ring-1 ring-purple-500/25">Premium</span> :
-                         c.status === "High Value Customer" ? <span className="inline-flex items-center rounded-full bg-amber-500/15 text-amber-300 text-xs font-semibold px-2 py-1 ring-1 ring-amber-500/25">High Value</span> :
-                         c.status === "Loyal Customer" ? <span className="inline-flex items-center rounded-full bg-indigo-500/15 text-indigo-300 text-xs font-semibold px-2 py-1 ring-1 ring-indigo-500/25">Loyal</span> :
-                         <span className="text-xs text-white/40">Regular</span>}
-                      </td>
+            <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+              <SectionTitle eyebrow="Logistics" title="Reorder Intelligence" pill="Supply Chain" />
+              <div className="overflow-x-auto mt-8">
+                <table className="w-full text-left border-separate border-spacing-y-2">
+                  <thead>
+                    <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                      <th className="px-6 py-4">Critical Asset</th>
+                      <th className="px-4 py-4">Partner</th>
+                      <th className="px-4 py-4 text-right">Current Level</th>
+                      <th className="px-4 py-4 text-right">Suggested deploy</th>
+                      <th className="px-6 py-4 text-center">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Reorder Intelligence Table */}
-          <div className="mt-6 rounded-2xl bg-white/5 ring-1 ring-white/10 overflow-hidden">
-            <div className="px-4 py-3 bg-white/5 text-sm font-semibold text-white/90">Reorder Intelligence</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-white/80 min-w-[700px]">
-                <thead className="bg-white/5 text-white/60">
-                  <tr>
-                    <th className="px-4 py-3">Item</th>
-                    <th className="px-4 py-3">SKU</th>
-                    <th className="px-4 py-3">Supplier</th>
-                    <th className="px-4 py-3 text-right">Current Qty</th>
-                    <th className="px-4 py-3 text-right">Min Stock</th>
-                    <th className="px-4 py-3 text-right">Suggested Reorder</th>
-                    <th className="px-4 py-3 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {level2Intelligence.reorderIntelligence.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-4 text-center text-white/40">No items need reordering</td></tr>
-                  ) : level2Intelligence.reorderIntelligence.map(item => (
-                    <tr key={item.id} className="border-t border-white/10 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-medium">{item.itemName}</td>
-                      <td className="px-4 py-3 text-white/50">{item.sku}</td>
-                      <td className="px-4 py-3">{item.supplier}</td>
-                      <td className="px-4 py-3 text-right text-red-300">{item.currentQty}</td>
-                      <td className="px-4 py-3 text-right text-white/50">{item.minStock}</td>
-                      <td className="px-4 py-3 text-right font-medium text-amber-300">{item.suggestedQty}</td>
-                      <td className="px-4 py-3 text-center">
-                         {item.status === "Out of Stock" ? <span className="inline-flex items-center rounded-full bg-red-500/15 text-red-300 text-xs font-semibold px-2 py-1 ring-1 ring-red-500/25">Out of Stock</span> :
-                          <span className="inline-flex items-center rounded-full bg-orange-500/15 text-orange-300 text-xs font-semibold px-2 py-1 ring-1 ring-orange-500/25">Low Stock</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Profit by Item Table */}
-          <div className="mt-6 rounded-2xl bg-white/5 ring-1 ring-white/10 overflow-hidden">
-            <div className="px-4 py-3 bg-white/5 text-sm font-semibold text-white/90">Profit by Item</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-white/80 min-w-[700px]">
-                <thead className="bg-white/5 text-white/60">
-                  <tr>
-                    <th className="px-4 py-3">Item</th>
-                    <th className="px-4 py-3">SKU</th>
-                    <th className="px-4 py-3 text-right">Units Sold</th>
-                    <th className="px-4 py-3 text-right">Revenue</th>
-                    <th className="px-4 py-3 text-right">Estimated Profit</th>
-                    <th className="px-4 py-3 text-right">Margin %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {level2Intelligence.profitByItem.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-4 text-center text-white/40">No sales data</td></tr>
-                  ) : level2Intelligence.profitByItem.map(p => (
-                    <tr key={p.id} className="border-t border-white/10 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-medium">{p.itemName}</td>
-                      <td className="px-4 py-3 text-white/50">{p.sku}</td>
-                      <td className="px-4 py-3 text-right">{p.unitsSold}</td>
-                      <td className="px-4 py-3 text-right text-white/80">{formatCurrency(p.revenue)}</td>
-                      <td className="px-4 py-3 text-right text-emerald-300 font-medium">{formatCurrency(p.estimatedProfit)}</td>
-                      <td className="px-4 py-3 text-right text-indigo-300">{p.marginPct.toFixed(2)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Discount Intelligence Table */}
-          <div className="mt-6 rounded-2xl bg-white/5 ring-1 ring-white/10 overflow-hidden">
-            <div className="px-4 py-3 bg-white/5 text-sm font-semibold text-white/90">Discount Intelligence</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-white/80 min-w-[700px]">
-                <thead className="bg-white/5 text-white/60">
-                  <tr>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3 text-right">Purchases</th>
-                    <th className="px-4 py-3 text-right">Total Spent</th>
-                    <th className="px-4 py-3 text-right">Discount Given</th>
-                    <th className="px-4 py-3 text-center">Suggested Next Discount</th>
-                    <th className="px-4 py-3">Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {level2Intelligence.discountIntelligence.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-4 text-center text-white/40">No discount data</td></tr>
-                  ) : level2Intelligence.discountIntelligence.map((d, idx) => (
-                    <tr key={idx} className="border-t border-white/10 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-medium">{d.customer}</td>
-                      <td className="px-4 py-3 text-right">{d.purchases}</td>
-                      <td className="px-4 py-3 text-right text-emerald-300">{formatCurrency(d.totalSpent)}</td>
-                      <td className="px-4 py-3 text-right text-amber-300">{formatCurrency(d.discountGiven)}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="inline-flex items-center rounded-full bg-blue-500/15 text-blue-300 text-xs font-semibold px-2 py-1 ring-1 ring-blue-500/25">
-                          {d.suggestedNext}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-white/60 text-xs">{d.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Level 2 Step 3: Suspicious Action Alerts & Anomaly Detection ── */}
-        <div className="mt-10">
-          <SectionHeader
-            title="Level 2 Step 3 — Suspicious Action Alerts & Anomaly Detection"
-            pillText="Security Intelligence"
-            subtitle="This section demonstrates real-time anomaly detection across sales, returns, cancellations, discounts, and sensitive admin actions. Alerts are saved to Firestore and appear in Notifications."
-          />
-
-          {/* Stats */}
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <Card title={String(anomalyAlerts.length)} desc="Total Anomaly Alerts" />
-            <Card title={String(anomalyAlerts.filter((a) => a.severity === "high").length)} desc="High Severity Alerts" />
-            <Card title={String(anomalyAlerts.filter((a) => a.severity === "medium").length)} desc="Medium Severity Alerts" />
-            <Card title={String(anomalyAlerts.filter((a) => a.severity === "low").length)} desc="Low Severity Alerts" />
-            <Card title={String(anomalyAlerts.filter((a) => {
-              const ts = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt ?? 0);
-              return Date.now() - ts.getTime() < 7 * 24 * 60 * 60 * 1000;
-            }).length)} desc="Recent (Last 7 Days)" />
-          </div>
-
-          {/* Export buttons */}
-          <div className="mt-6 flex flex-wrap gap-3">
-            <SecondaryButton type="button" onClick={exportAnomalyAlertsCsv}>
-              Export Anomaly Alerts CSV
-            </SecondaryButton>
-            <SecondaryButton type="button" onClick={exportAnomalyAlertsPdf}>
-              Export Anomaly Alerts PDF
-            </SecondaryButton>
-          </div>
-
-          {/* Anomaly Alerts Table */}
-          <div className="mt-6 rounded-2xl bg-white/5 ring-1 ring-white/10 overflow-hidden">
-            <div className="px-4 py-3 bg-white/5 text-sm font-semibold text-white/90 flex items-center gap-2">
-              🚨 Anomaly Alert Log
-              <span className="text-xs text-white/50 font-normal">({anomalyAlerts.length} total)</span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-white/80 min-w-[900px]">
-                <thead className="bg-white/5 text-white/60">
-                  <tr>
-                    <th className="px-4 py-3">Severity</th>
-                    <th className="px-4 py-3">Type</th>
-                    <th className="px-4 py-3">Title</th>
-                    <th className="px-4 py-3">Message</th>
-                    <th className="px-4 py-3 text-right">Created At</th>
-                    <th className="px-4 py-3 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {anomalyAlerts.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-6 text-center text-white/40">No anomaly alerts recorded yet. Alerts will appear when suspicious activity is detected.</td></tr>
-                  ) : anomalyAlerts.map((a) => {
-                    const sevStyle =
-                      a.severity === "high" ? "bg-red-500/15 text-red-300 ring-red-500/25" :
-                      a.severity === "medium" ? "bg-amber-500/15 text-amber-300 ring-amber-500/25" :
-                      "bg-slate-500/15 text-slate-300 ring-slate-500/25";
-                    const ts = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt ?? 0);
-                    return (
-                      <tr key={a.id} className="border-t border-white/10 hover:bg-white/[0.02] align-top">
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 uppercase ${sevStyle}`}>
-                            {a.severity || "low"}
-                          </span>
+                  </thead>
+                  <tbody>
+                    {level2Intelligence.reorderIntelligence.map((item) => (
+                      <tr key={item.id} className="group hover:bg-white/[0.02] transition-colors">
+                        <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                          <div className="text-[13px] font-black text-white">{item.itemName}</div>
+                          <div className="text-[10px] font-black text-white/20 uppercase tracking-widest mt-1">SKU: {item.sku}</div>
                         </td>
-                        <td className="px-4 py-3 text-white/60 text-xs">{(a.type || "").replace(/_/g, " ")}</td>
-                        <td className="px-4 py-3 font-medium">
-                          <div className="font-semibold">{a.title}</div>
-                          <div className="text-[10px] text-white/40 mt-0.5">ID: {a.id}</div>
+                        <td className="px-4 py-4 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-bold text-white/40 uppercase">
+                          {item.supplier}
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="text-white/70 text-xs max-w-[280px] leading-relaxed">{a.message}</div>
-                          <div className="mt-2 flex flex-col gap-1">
-                            {a.reviewedAt && (
-                              <div className="text-[10px] text-blue-400/70 italic">
-                                Reviewed by {a.reviewedByEmail || "Admin"} at {a.reviewedAt?.toDate ? a.reviewedAt.toDate().toLocaleString() : new Date(a.reviewedAt).toLocaleString()}
-                              </div>
-                            )}
-                            {a.resolvedAt && (
-                              <div className="text-[10px] text-emerald-400/70 italic">
-                                Resolved by {a.resolvedByEmail || "Admin"} at {a.resolvedAt?.toDate ? a.resolvedAt.toDate().toLocaleString() : new Date(a.resolvedAt).toLocaleString()}
-                              </div>
-                            )}
-                          </div>
+                        <td className="px-4 py-4 text-right bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[13px] font-black text-red-400">
+                          {item.currentQty}
                         </td>
-                        <td className="px-4 py-3 text-right text-white/50 text-xs whitespace-nowrap">{ts.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`inline-flex items-center rounded-full text-[10px] font-semibold px-2 py-0.5 ring-1 uppercase ${
-                            String(a.status || "active").toLowerCase() === "resolved" ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/20" :
-                            String(a.status || "active").toLowerCase() === "reviewed" ? "bg-blue-500/10 text-blue-300 ring-blue-500/20" :
-                            "bg-red-500/10 text-red-300 ring-red-500/20"
-                          }`}>
-                            {a.status || "active"}
+                        <td className="px-4 py-4 text-right bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[13px] font-black text-amber-400">
+                          {item.suggestedQty}
+                        </td>
+                        <td className="px-6 py-4 text-center bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors">
+                          <span className={cx(
+                            "text-[8px] font-black uppercase tracking-[0.2em] px-2 py-1 rounded-md ring-1",
+                            item.status === "Out of Stock" ? "bg-red-500/10 text-red-400 ring-red-500/20" : "bg-amber-500/10 text-amber-400 ring-amber-500/20"
+                          )}>
+                            {item.status}
                           </span>
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* ── Level 2 Step 4: AI Business Summary ─────────────────────────── */}
-        <div className="mt-10">
-          <SectionHeader
-            title="Level 2 Step 4 — AI Business Summary"
-            pillText="Rule-Based AI"
-            subtitle="An AI-style business intelligence summary generated entirely from live Firestore data — no external API required. Updates in real time as sales, inventory, customers, and anomalies change."
-          />
+        {activeTab === "evidence" && (
+          <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-10 lg:grid-cols-2">
+              <div className="rounded-[2.5rem] bg-emerald-500/5 ring-1 ring-emerald-500/10 p-8 sm:p-10 border border-emerald-500/5 shadow-2xl">
+                <div className="flex items-center gap-3 mb-8">
+                  <Pill className="!bg-emerald-500/10 !text-emerald-400">Phase I</Pill>
+                  <h3 className="text-xl font-black text-white tracking-tight">Level 1 Evidence</h3>
+                </div>
+                <div className="grid gap-3">
+                  {[
+                    "Risky action confirmation protocol",
+                    "LoginActivity audit trails",
+                    "Bulk asset CSV synchronization",
+                    "Dynamic Invoice synthesis (PDF)",
+                    "Strategic Margin Analysis",
+                    "Reorder Prediction engine",
+                  ].map((item) => (
+                    <div key={item} className="flex items-center gap-3 p-4 rounded-2xl bg-white/[0.03] ring-1 ring-white/10 border border-white/5">
+                      <div className="h-5 w-5 rounded-full bg-emerald-500/20 flex items-center justify-center text-[10px]">✓</div>
+                      <div className="text-xs font-bold text-white/70 uppercase tracking-widest">{item}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
-          {/* Summary stats */}
-          {aiSummary && (
-            <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-              <Card title={String(aiSummary.healthScore)} desc="Health Score (0–100)" />
-              <Card title={aiSummary.statusLabel} desc="Business Status" />
-              <Card title={String(aiSummary.keyInsights.length)} desc="Key Insights" />
-              <Card title={String(aiSummary.risks.filter(r => r.severity !== 'low').length)} desc="Active Risks" />
-              <Card title={String(aiSummary.recommendedActions.length)} desc="Recommended Actions" />
+              <div className="rounded-[2.5rem] bg-indigo-500/5 ring-1 ring-indigo-500/10 p-8 sm:p-10 border border-indigo-500/5 shadow-2xl">
+                <div className="flex items-center gap-3 mb-8">
+                  <Pill className="!bg-indigo-500/10 !text-indigo-400">Phase II</Pill>
+                  <h3 className="text-xl font-black text-white tracking-tight">Level 2 Evidence</h3>
+                </div>
+                <div className="grid gap-3">
+                  {[
+                    "AI Business Health Synthesis",
+                    "Loyalty status classification",
+                    "Supply Chain reorder intelligence",
+                    "Anomaly detection telemetry",
+                    "Security monitoring alerts",
+                    "Decision support visualization",
+                  ].map((item) => (
+                    <div key={item} className="flex items-center gap-3 p-4 rounded-2xl bg-white/[0.03] ring-1 ring-white/10 border border-white/5">
+                      <div className="h-5 w-5 rounded-full bg-indigo-500/20 flex items-center justify-center text-[10px]">✓</div>
+                      <div className="text-xs font-bold text-white/70 uppercase tracking-widest">{item}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          )}
 
-          {/* Export button */}
-          <div className="mt-6 flex flex-wrap gap-3">
-            <SecondaryButton type="button" onClick={exportAiSummaryCsv}>
-              Export AI Summary CSV
-            </SecondaryButton>
+            <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+              <SectionTitle eyebrow="Validation" title="Functional Protocol Registry" pill="Tests Passed" />
+              <div className="overflow-x-auto mt-8">
+                <table className="w-full text-left border-separate border-spacing-y-2">
+                  <thead>
+                    <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                      <th className="px-6 py-4">Test Vector</th>
+                      <th className="px-4 py-4">Expected Synthesis</th>
+                      <th className="px-4 py-4">Actual Result</th>
+                      <th className="px-6 py-4 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {functionalTests.map((t) => (
+                      <tr key={t.id} className="group hover:bg-white/[0.02] transition-colors">
+                        <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                          <div className="text-[13px] font-black text-white">{t.testCase}</div>
+                          <div className="text-[9px] font-black text-white/20 uppercase tracking-widest mt-1">{t.id} · {t.module}</div>
+                        </td>
+                        <td className="px-4 py-4 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-medium text-white/40 leading-relaxed max-w-xs">
+                          {t.expected}
+                        </td>
+                        <td className="px-4 py-4 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-black text-white leading-relaxed max-w-xs">
+                          {t.actual}
+                        </td>
+                        <td className="px-6 py-4 text-center bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors">
+                          <span className={cx(
+                            "text-[8px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md ring-1",
+                            t.status === "Pass" ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" : "bg-amber-500/10 text-amber-400 ring-amber-500/20"
+                          )}>
+                            {t.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+              <SectionTitle eyebrow="Hardening" title="Security Clearance Log" pill="Tests Passed" />
+              <div className="overflow-x-auto mt-8">
+                <table className="w-full text-left border-separate border-spacing-y-2">
+                  <thead>
+                    <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                      <th className="px-6 py-4">Threat Vector</th>
+                      <th className="px-4 py-4">Security Protocol</th>
+                      <th className="px-4 py-4">Implementation Evidence</th>
+                      <th className="px-6 py-4 text-center">Outcome</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {securityTests.map((t) => (
+                      <tr key={t.id} className="group hover:bg-white/[0.02] transition-colors">
+                        <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                          <div className="text-[13px] font-black text-white">{t.testCase}</div>
+                          <div className="text-[9px] font-black text-white/20 uppercase tracking-widest mt-1">{t.id} · {t.category}</div>
+                        </td>
+                        <td className="px-4 py-4 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-medium text-white/40 leading-relaxed max-w-xs">
+                          {t.expected}
+                        </td>
+                        <td className="px-4 py-4 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors text-[11px] font-black text-white leading-relaxed max-w-xs">
+                          {t.actual}
+                        </td>
+                        <td className="px-6 py-4 text-center bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors">
+                          <span className={cx(
+                            "text-[8px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md ring-1",
+                            t.status === "Pass" ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" : "bg-amber-500/10 text-amber-400 ring-amber-500/20"
+                          )}>
+                            {t.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
+        )}
 
-          {/* AI Panel */}
-          <div className="mt-6">
-            <AiSummaryPanel summary={aiSummary} />
+        {activeTab === "anomalies" && (
+          <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
+              <MetricCard label="Total Anomalies" value={anomalyAlerts.length} color="indigo" />
+              <MetricCard label="Critical Risk" value={anomalyAlerts.filter(a => a.severity === 'high').length} color="red" alert={anomalyAlerts.filter(a => a.severity === 'high').length > 0} />
+              <MetricCard label="Elevated Risk" value={anomalyAlerts.filter(a => a.severity === 'medium').length} color="amber" />
+              <MetricCard label="Resolved" value={anomalyAlerts.filter(a => a.status === 'resolved').length} color="emerald" />
+              <MetricCard label="Active (7d)" value={anomalyAlerts.filter(a => {
+                const ts = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt ?? 0);
+                return Date.now() - ts.getTime() < 7 * 24 * 60 * 60 * 1000;
+              }).length} color="blue" />
+            </div>
+
+            <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+              <SectionTitle eyebrow="Sentinel" title="Security Anomaly Ledger" pill={`${anomalyAlerts.length} Alerts`} />
+              <div className="overflow-x-auto mt-8">
+                <table className="w-full text-left border-separate border-spacing-y-4">
+                  <thead>
+                    <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                      <th className="px-6 py-4">Risk Classification</th>
+                      <th className="px-4 py-4">Threat Context</th>
+                      <th className="px-4 py-4 text-right">Timestamp</th>
+                      <th className="px-6 py-4 text-center">Oversight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {anomalyAlerts.map((a) => {
+                      const sevStyle = 
+                        a.severity === "high" ? "bg-red-500/10 text-red-400 ring-red-500/20 shadow-[0_0_20px_rgba(239,68,68,0.1)]" :
+                        a.severity === "medium" ? "bg-amber-500/10 text-amber-400 ring-amber-500/20" :
+                        "bg-white/5 text-white/40 ring-white/10";
+                      
+                      const ts = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt ?? 0);
+
+                      return (
+                        <tr key={a.id} className="group hover:bg-white/[0.02] transition-colors align-top">
+                          <td className="px-6 py-6 bg-white/[0.02] rounded-l-3xl group-hover:bg-white/[0.04] transition-colors min-w-[200px]">
+                            <span className={cx("text-[8px] font-black uppercase tracking-[0.2em] px-2 py-1 rounded-md ring-1", sevStyle)}>
+                              {a.severity || "low"} Risk
+                            </span>
+                            <div className="mt-4 text-[13px] font-black text-white">{a.title}</div>
+                            <div className="text-[9px] font-black text-white/20 uppercase tracking-widest mt-1">Ref: {a.id.slice(-8)}</div>
+                          </td>
+                          <td className="px-4 py-6 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                            <p className="text-[11px] font-medium text-white/60 leading-relaxed max-w-sm">{a.message}</p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {a.reviewedAt && <Pill className="!px-2 !py-0.5 !text-[8px] !bg-indigo-500/10 !text-indigo-400/70">Reviewed</Pill>}
+                              {a.resolvedAt && <Pill className="!px-2 !py-0.5 !text-[8px] !bg-emerald-500/10 !text-emerald-400/70">Resolved</Pill>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-6 text-right bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors whitespace-nowrap">
+                            <div className="text-[11px] font-black text-white">{ts.toLocaleDateString()}</div>
+                            <div className="text-[10px] font-bold text-white/20 mt-1 uppercase tracking-tighter">{ts.toLocaleTimeString()}</div>
+                          </td>
+                          <td className="px-6 py-6 text-center bg-white/[0.02] rounded-r-3xl group-hover:bg-white/[0.04] transition-colors">
+                            <span className={cx(
+                              "text-[8px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md ring-1",
+                              a.status === "resolved" ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" :
+                              a.status === "reviewed" ? "bg-indigo-500/10 text-indigo-400 ring-indigo-500/20" :
+                              "bg-red-500/10 text-red-400 ring-red-500/20"
+                            )}>
+                              {a.status || "active"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="mt-10">
-          <SectionHeader
-            title="Functional Testing"
-            pillText={`${functionalTests.length} test cases`}
-            subtitle="These test cases show core feature validation for authentication, inventory, sales, reports, user management, and document workflow."
-          />
+        {activeTab === "exports" && (
+          <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-10 lg:grid-cols-3">
+              <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl flex flex-col justify-between">
+                <div>
+                  <div className="text-4xl mb-6">📂</div>
+                  <h3 className="text-xl font-black text-white tracking-tight">Transactional Ledger</h3>
+                  <p className="mt-4 text-sm font-medium text-white/40 leading-relaxed">Extract full sales transaction history, including refunds, discounts, and customer links.</p>
+                </div>
+                <div className="mt-10 space-y-3">
+                  <PrimaryButton onClick={exportSalesPdf}>Download PDF Ledger</PrimaryButton>
+                  <SecondaryButton onClick={exportSalesCsv}>Export CSV Records</SecondaryButton>
+                </div>
+              </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <SecondaryButton type="button" onClick={exportFunctionalTestsCsv}>
-              Export Functional Testing CSV
-            </SecondaryButton>
-            <SecondaryButton type="button" onClick={exportFunctionalTestsPdf}>
-              Export Functional Testing PDF
-            </SecondaryButton>
+              <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl flex flex-col justify-between">
+                <div>
+                  <div className="text-4xl mb-6">📉</div>
+                  <h3 className="text-xl font-black text-white tracking-tight">Inventory Logistics</h3>
+                  <p className="mt-4 text-sm font-medium text-white/40 leading-relaxed">Generate depletion reports, reorder signals, and supply chain partner intelligence.</p>
+                </div>
+                <div className="mt-10 space-y-3">
+                  <PrimaryButton onClick={exportLowStockPdf}>Download Low Stock PDF</PrimaryButton>
+                  <SecondaryButton onClick={exportLowStockCsv}>Export Inventory CSV</SecondaryButton>
+                </div>
+              </div>
+
+              <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl flex flex-col justify-between">
+                <div>
+                  <div className="text-4xl mb-6">📋</div>
+                  <h3 className="text-xl font-black text-white tracking-tight">System Evidence</h3>
+                  <p className="mt-4 text-sm font-medium text-white/40 leading-relaxed">Verification packs for functional and security testing protocols.</p>
+                </div>
+                <div className="mt-10 space-y-3">
+                  <PrimaryButton onClick={exportFunctionalTestsPdf}>Functional Evidence (PDF)</PrimaryButton>
+                  <SecondaryButton onClick={exportSecurityTestsPdf}>Security Evidence (PDF)</SecondaryButton>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[2.5rem] bg-indigo-500/5 ring-1 ring-indigo-500/20 p-10 border border-indigo-500/10 text-center">
+              <h3 className="text-lg font-black text-white uppercase tracking-[0.2em] mb-4">Strategic AI Extractions</h3>
+              <div className="flex flex-wrap justify-center gap-4">
+                <SecondaryButton className="!w-fit" onClick={exportAiSummaryCsv}>AI Business Health CSV</SecondaryButton>
+                <SecondaryButton className="!w-fit" onClick={exportTopCustomersCsv}>Top Customers CSV</SecondaryButton>
+                <SecondaryButton className="!w-fit" onClick={exportProfitByItemCsv}>Profit by Item CSV</SecondaryButton>
+                <SecondaryButton className="!w-fit" onClick={exportAnomalyAlertsCsv}>Anomaly Alerts CSV</SecondaryButton>
+              </div>
+            </div>
           </div>
-
-          <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10 bg-white/5">
-            <table className="min-w-[1100px] w-full text-sm text-left text-white/80">
-              <thead className="bg-white/5 text-white/90">
-                <tr>
-                  <th className="px-4 py-3">Test ID</th>
-                  <th className="px-4 py-3">Module</th>
-                  <th className="px-4 py-3">Test Case</th>
-                  <th className="px-4 py-3">Expected Result</th>
-                  <th className="px-4 py-3">Actual Result</th>
-                  <th className="px-4 py-3">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {functionalTests.map((test) => (
-                  <tr key={test.id} className="border-t border-white/10 align-top">
-                    <td className="px-4 py-3 whitespace-nowrap">{test.id}</td>
-                    <td className="px-4 py-3">{test.module}</td>
-                    <td className="px-4 py-3">{test.testCase}</td>
-                    <td className="px-4 py-3">{test.expected}</td>
-                    <td className="px-4 py-3">{test.actual}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={test.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="mt-10">
-          <SectionHeader
-            title="Security Testing"
-            pillText={`${securityTests.length} test cases`}
-            subtitle="These test cases summarize access control, route protection, Firestore rule enforcement, and audit logging validation."
-          />
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <SecondaryButton type="button" onClick={exportSecurityTestsCsv}>
-              Export Security Testing CSV
-            </SecondaryButton>
-            <SecondaryButton type="button" onClick={exportSecurityTestsPdf}>
-              Export Security Testing PDF
-            </SecondaryButton>
-          </div>
-
-          <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10 bg-white/5">
-            <table className="min-w-[1100px] w-full text-sm text-left text-white/80">
-              <thead className="bg-white/5 text-white/90">
-                <tr>
-                  <th className="px-4 py-3">Test ID</th>
-                  <th className="px-4 py-3">Category</th>
-                  <th className="px-4 py-3">Test Case</th>
-                  <th className="px-4 py-3">Expected Result</th>
-                  <th className="px-4 py-3">Actual Result</th>
-                  <th className="px-4 py-3">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {securityTests.map((test) => (
-                  <tr key={test.id} className="border-t border-white/10 align-top">
-                    <td className="px-4 py-3 whitespace-nowrap">{test.id}</td>
-                    <td className="px-4 py-3">{test.category}</td>
-                    <td className="px-4 py-3">{test.testCase}</td>
-                    <td className="px-4 py-3">{test.expected}</td>
-                    <td className="px-4 py-3">{test.actual}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={test.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        )}
       </div>
     </PageShell>
   );
-}
+}

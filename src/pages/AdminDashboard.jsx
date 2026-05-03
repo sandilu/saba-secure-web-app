@@ -25,6 +25,7 @@ import {
 } from "recharts";
 
 import { db } from "../firebase/firebaseServices";
+import MeasuredChartFrame from "../components/MeasuredChartFrame";
 import { useAuth } from "../auth/AuthContext";
 import {
   PageShell,
@@ -53,6 +54,7 @@ import BulkImportModal from "../components/BulkImportModal";
 import AiSummaryPanel from "../components/AiSummaryPanel";
 import ReauthModal from "../components/ReauthModal";
 import { generateBusinessSummary } from "../utils/aiSummaryRules";
+const cx = (...classes) => classes.filter(Boolean).join(" ");
 
 const initialForm = {
   itemName: "",
@@ -125,6 +127,45 @@ function CustomPieTooltip({ active, payload }) {
     <div className="rounded-2xl border border-white/10 bg-slate-950/95 px-4 py-3 text-sm text-white shadow-xl">
       <div className="font-semibold">{item.name}</div>
       <div className="mt-1 text-white/75">Count: {item.value}</div>
+    </div>
+  );
+}
+
+function MetricCard({ label, value, sub, icon, color = "indigo", alert = false }) {
+  const colors = {
+    indigo: "from-indigo-500/20 to-indigo-500/5 text-indigo-400 ring-indigo-500/20",
+    amber: "from-amber-500/20 to-amber-500/5 text-amber-400 ring-amber-500/20",
+    emerald: "from-emerald-500/20 to-emerald-500/5 text-emerald-400 ring-emerald-500/20",
+    purple: "from-purple-500/20 to-purple-500/5 text-purple-400 ring-purple-500/20",
+    blue: "from-blue-500/20 to-blue-500/5 text-blue-400 ring-blue-500/20",
+    red: "from-red-500/20 to-red-500/5 text-red-400 ring-red-500/20",
+  };
+
+  const selectedColor = colors[color] || colors.indigo;
+
+  return (
+    <div className={cx(
+      "relative overflow-hidden rounded-3xl bg-white/[0.03] p-6 sm:p-8 ring-1 transition-all duration-500 group hover:bg-white/[0.05]",
+      selectedColor,
+      alert && "shadow-[0_0_30px_rgba(245,158,11,0.1)]"
+    )}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-50 mb-2">{label}</div>
+          <div className="text-3xl font-black tracking-tight text-white mb-1 group-hover:scale-105 transition-transform origin-left duration-500">
+            {value}
+          </div>
+          {sub && <div className="text-[10px] font-bold opacity-40 uppercase tracking-widest">{sub}</div>}
+        </div>
+        {icon && (
+          <div className="h-10 w-10 rounded-2xl bg-white/5 ring-1 ring-white/10 flex items-center justify-center text-xl shadow-inner group-hover:rotate-12 transition-transform duration-500">
+            {icon}
+          </div>
+        )}
+      </div>
+      
+      {/* Dynamic ambient glow */}
+      <div className="absolute -bottom-10 -right-10 h-32 w-32 bg-current opacity-[0.03] blur-[40px] pointer-events-none" />
     </div>
   );
 }
@@ -1137,383 +1178,432 @@ export default function AdminDashboard() {
     )}
     <PageShell>
       <div className="grid gap-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-2 flex-wrap">
-              <Pill>Admin Dashboard</Pill>
-              <Pill>Low stock {lowStockCount}</Pill>
-              <Pill>Total sales {salesAnalytics.totalSalesCount}</Pill>
-            </div>
-
-            <h1 className="mt-3 text-2xl sm:text-3xl font-semibold tracking-tight text-white">
-              Business Management Console
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+          <div className="animate-in slide-in-from-left duration-700">
+            <Pill className="mb-3">Administrative Terminal</Pill>
+            <h1 className="text-4xl sm:text-5xl font-black tracking-tight text-white leading-none">
+              Strategic Control
             </h1>
 
-            <p className="mt-1 text-sm text-white/70">
-              Signed in as <b>{profile?.name || user?.email}</b> • role:{" "}
-              <b>{profile?.role || "admin"}</b>
+            <p className="mt-4 text-sm text-white/50 font-medium flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Secure Session: <span className="text-white">{profile?.name || user?.email}</span> 
+              <span className="mx-2 text-white/10">|</span>
+              Clearence: <span className="text-white uppercase tracking-widest text-[10px] bg-white/5 px-2 py-0.5 rounded-md">{profile?.role || "admin"}</span>
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3 animate-in slide-in-from-right duration-700">
             <Link to="/sales-history">
-              <SecondaryButton type="button">Sales History</SecondaryButton>
+              <SecondaryButton className="!py-3 !px-6">Sales Archive</SecondaryButton>
             </Link>
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Card title={`${items.length} items`} desc="Total inventory records" />
-          <Card title={`${lowStockCount} low stock`} desc="Items at or below minimum level" />
-          <Card title={`${usersList.length} users`} desc="Registered user profiles" />
-          <Card
-            title={formatCurrency(totalRevenueEstimate)}
-            desc="Estimated inventory sales value"
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-4">
+          <MetricCard 
+            label="Inventory Assets" 
+            value={items.length} 
+            sub="Total stock records" 
+            icon="📦"
+            color="indigo"
+          />
+          <MetricCard 
+            label="Resource Alerts" 
+            value={lowStockCount} 
+            sub="Replenishment required" 
+            icon="🚨"
+            color="amber"
+            alert={lowStockCount > 0}
+          />
+          <MetricCard 
+            label="Access Directory" 
+            value={usersList.length} 
+            sub="Verified user profiles" 
+            icon="👥"
+            color="blue"
+          />
+          <MetricCard 
+            label="Asset Valuation" 
+            value={formatCurrency(totalRevenueEstimate)} 
+            sub="Estimated market value" 
+            icon="💎"
+            color="purple"
           />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Card
-            title={`${salesAnalytics.totalSalesCount}`}
-            desc="Total sales transactions recorded"
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-4">
+          <MetricCard 
+            label="Transaction Volume" 
+            value={salesAnalytics.totalSalesCount} 
+            sub="Total sales processed" 
+            icon="⚡"
+            color="emerald"
           />
-          <Card
-            title={`${salesAnalytics.totalUnitsSold}`}
-            desc="Total units sold across all items"
+          <MetricCard 
+            label="Unit Velocity" 
+            value={salesAnalytics.totalUnitsSold} 
+            sub="Global units distributed" 
+            icon="📈"
+            color="blue"
           />
-          <Card
-            title={formatCurrency(salesAnalytics.totalRevenue)}
-            desc="Total revenue from recorded sales"
+          <MetricCard 
+            label="Gross Revenue" 
+            value={formatCurrency(salesAnalytics.totalRevenue)} 
+            sub="Verified sales income" 
+            icon="💰"
+            color="indigo"
           />
-          <Card
-            title={formatCurrency(salesAnalytics.totalProfit)}
-            desc="Total estimated profit from sales"
+          <MetricCard 
+            label="Strategic Profit" 
+            value={formatCurrency(salesAnalytics.totalProfit)} 
+            sub="Net operational margin" 
+            icon="⚖️"
+            color="emerald"
           />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Card title={`${customers.length} customers`} desc="Registered customer accounts" />
-          <Card title={`${suppliers.length} suppliers`} desc="Registered supplier contacts" />
-          <Card
-            title={`${notifications.filter(n => !n.isRead).length} unread`}
-            desc="Active unread notifications"
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-10">
+          <MetricCard 
+            label="Loyalty Base" 
+            value={customers.length} 
+            sub="Registered customer accounts" 
+            icon="🏅"
+            color="purple"
           />
-          <Card
-            title={`${docsList.filter(d => d.status === "pending").length} pending`}
-            desc="Documents awaiting approval"
+          <MetricCard 
+            label="Supply Chain" 
+            value={suppliers.length} 
+            sub="Verified supplier contacts" 
+            icon="🚚"
+            color="blue"
+          />
+          <MetricCard 
+            label="Active Alerts" 
+            value={notifications.filter(n => !n.isRead).length} 
+            sub="Unread system notifications" 
+            icon="🔔"
+            color="amber"
+            alert={notifications.filter(n => !n.isRead).length > 0}
+          />
+          <MetricCard 
+            label="Task Backlog" 
+            value={docsList.filter(d => d.status === "pending").length} 
+            sub="Documents awaiting approval" 
+            icon="📝"
+            color="indigo"
+            alert={docsList.filter(d => d.status === "pending").length > 0}
           />
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-3">
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+        <div className="grid gap-6 xl:grid-cols-2 mb-10">
+          <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
             <SectionTitle
-              eyebrow="Visual Analytics"
-              title="Top Selling Items"
-              pill="Bar Chart"
+              eyebrow="Market Intelligence"
+              title="Revenue Trajectory"
+              pill="Real-time Trend"
             />
 
-            <p className="mt-2 text-xs leading-5 text-white/55">
-              Displays the highest-selling products by unit count.
+            <p className="mt-4 text-[13px] leading-relaxed text-white/40 font-medium">
+              Daily revenue fluctuation analysis across the recent operational window.
             </p>
 
-            <div className="mt-4 h-72">
+            <div className="mt-8 h-80">
               {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading chart...
-                </div>
-              ) : chartData.salesByItemChart.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  No sales data available for chart.
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={chartData.salesByItemChart}
-                    margin={{ top: 10, right: 10, left: -20, bottom: 10 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="name" stroke="#cbd5e1" tick={{ fontSize: 12 }} />
-                    <YAxis stroke="#cbd5e1" tick={{ fontSize: 12 }} allowDecimals={false} />
-                    <Tooltip content={<CustomBarTooltip />} />
-                    <Bar dataKey="units" fill="#38bdf8" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
-            <SectionTitle
-              eyebrow="Visual Analytics"
-              title="Revenue Trend"
-              pill="Line Chart"
-            />
-
-            <p className="mt-2 text-xs leading-5 text-white/55">
-              Shows revenue movement across the most recent recorded days.
-            </p>
-
-            <div className="mt-4 h-72">
-              {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading chart...
+                <div className="flex h-full items-center justify-center rounded-3xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/30 italic">
+                  Synchronizing analytical data...
                 </div>
               ) : chartData.revenueTrend.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  No revenue trend data available yet.
+                <div className="flex h-full items-center justify-center rounded-3xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/30 italic">
+                  No revenue trend detected in the current window.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={chartData.revenueTrend}
-                    margin={{ top: 10, right: 10, left: -10, bottom: 10 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="label" stroke="#cbd5e1" tick={{ fontSize: 12 }} />
-                    <YAxis stroke="#cbd5e1" tick={{ fontSize: 12 }} />
-                    <Tooltip content={<CustomLineTooltip />} />
-                    <Line
-                      type="monotone"
-                      dataKey="revenue"
-                      stroke="#818cf8"
-                      strokeWidth={3}
-                      dot={{ r: 4, fill: "#a5b4fc" }}
-                      activeDot={{ r: 6 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <MeasuredChartFrame height={320}>
+                  {({ width, height }) => (
+                    <LineChart
+                      width={width}
+                      height={height}
+                      data={chartData.revenueTrend}
+                      margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                      <XAxis 
+                        dataKey="label" 
+                        stroke="#ffffff20" 
+                        tick={{ fontSize: 10, fontWeight: 700, fill: "#ffffff40" }} 
+                        axisLine={false}
+                        tickLine={false}
+                        dy={10}
+                      />
+                      <YAxis 
+                        stroke="#ffffff20" 
+                        tick={{ fontSize: 10, fontWeight: 700, fill: "#ffffff40" }} 
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(val) => `Rs. ${val/1000}k`}
+                      />
+                      <Tooltip content={<CustomLineTooltip />} />
+                      <Line
+                        type="monotone"
+                        dataKey="revenue"
+                        stroke="#818cf8"
+                        strokeWidth={4}
+                        dot={{ r: 5, fill: "#818cf8", strokeWidth: 2, stroke: "#0f172a" }}
+                        activeDot={{ r: 8, strokeWidth: 0 }}
+                      />
+                    </LineChart>
+                  )}
+                </MeasuredChartFrame>
               )}
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+          <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
             <SectionTitle
-              eyebrow="Visual Analytics"
-              title="Low Stock Overview"
-              pill="Pie Chart"
+              eyebrow="Inventory Health"
+              title="Stock Distribution"
+              pill="Inventory Ratio"
             />
 
-            <p className="mt-2 text-xs leading-5 text-white/55">
-              Compares low stock items against healthy inventory items.
+            <p className="mt-4 text-[13px] leading-relaxed text-white/40 font-medium">
+              Critical ratio analysis of healthy assets versus replenishment risks.
             </p>
 
-            <div className="mt-4 h-72">
+            <div className="mt-8 h-80 relative">
               {loading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading chart...
+                <div className="flex h-full items-center justify-center rounded-3xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/30 italic">
+                  Analyzing stock levels...
                 </div>
               ) : items.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  No inventory data available yet.
-                </div>
-              ) : lowStockCount === 0 ? (
-                <div className="flex h-full items-center justify-center rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-center text-sm text-white/70">
-                  No low stock items detected. Inventory is currently in a healthy state.
+                <div className="flex h-full items-center justify-center rounded-3xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/30 italic">
+                  Insufficient inventory data for distribution mapping.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={lowStockPieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={90}
-                      dataKey="value"
-                      paddingAngle={3}
-                    >
-                      {lowStockPieData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${entry.name}`}
-                          fill={PIE_COLORS[index % PIE_COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomPieTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <>
+                  <MeasuredChartFrame height={320}>
+                    {({ width, height }) => {
+                      const outer = Math.max(80, Math.min(width, height) / 3);
+                      const inner = Math.max(50, outer - 30);
+                      return (
+                        <PieChart width={width} height={height}>
+                          <Pie
+                            data={lowStockPieData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={inner}
+                            outerRadius={outer}
+                            dataKey="value"
+                            paddingAngle={8}
+                            stroke="none"
+                          >
+                            {lowStockPieData.map((entry, index) => (
+                              <Cell
+                                key={`cell-${entry.name}`}
+                                fill={index === 0 ? "#fb7185" : "#818cf8"}
+                                className="hover:opacity-80 transition-opacity"
+                              />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<CustomPieTooltip />} />
+                        </PieChart>
+                      );
+                    }}
+                  </MeasuredChartFrame>
+                  
+                  {/* Center info */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <div className="text-2xl font-black text-white">{lowStockCount}</div>
+                    <div className="text-[10px] font-black uppercase tracking-widest text-white/30">Low Risk</div>
+                  </div>
+                </>
               )}
             </div>
 
-            <div className="mt-3 flex items-center gap-4 text-xs text-white/60 flex-wrap">
-              <div className="flex items-center gap-2">
-                <span className="inline-block h-3 w-3 rounded-full bg-[#fb7185]" />
-                <span>Low Stock</span>
+            <div className="mt-6 flex justify-center gap-8 text-[10px] font-black uppercase tracking-widest text-white/40">
+              <div className="flex items-center gap-3">
+                <span className="h-2 w-2 rounded-full bg-[#fb7185] shadow-[0_0_10px_rgba(251,113,133,0.5)]" />
+                <span>Replenish</span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="inline-block h-3 w-3 rounded-full bg-[#818cf8]" />
-                <span>Healthy Stock</span>
+              <div className="flex items-center gap-3">
+                <span className="h-2 w-2 rounded-full bg-[#818cf8] shadow-[0_0_10px_rgba(129,140,248,0.5)]" />
+                <span>Healthy</span>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-3">
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+        <div className="grid gap-6 xl:grid-cols-3 mb-10">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 border border-white/5 shadow-xl">
             <SectionTitle
-              eyebrow="Visual Analytics"
-              title="Profit by Item"
-              pill="Bar Chart"
+              eyebrow="Margin Analysis"
+              title="Profit Contribution"
+              pill="Top Performers"
             />
-            <p className="mt-2 text-xs leading-5 text-white/55">
-              Displays the highest-profit products.
-            </p>
-            <div className="mt-4 h-72">
+            <div className="mt-8 h-72">
               {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading chart...
-                </div>
+                <div className="flex h-full items-center justify-center text-sm text-white/30 italic">Calculating margins...</div>
               ) : chartData.profitByItemChart.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  No profit data available for chart.
-                </div>
+                <div className="flex h-full items-center justify-center text-sm text-white/30 italic text-center">No profit metrics available.</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={chartData.profitByItemChart}
-                    margin={{ top: 10, right: 10, left: -10, bottom: 10 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="name" stroke="#cbd5e1" tick={{ fontSize: 12 }} />
-                    <YAxis stroke="#cbd5e1" tick={{ fontSize: 12 }} allowDecimals={false} tickFormatter={(val) => `Rs. ${val/1000}k`} />
-                    <Tooltip content={<CustomBarTooltip />} />
-                    <Bar dataKey="profit" fill="#10b981" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <MeasuredChartFrame height={288}>
+                  {({ width, height }) => (
+                    <BarChart
+                      width={width}
+                      height={height}
+                      data={chartData.profitByItemChart}
+                      margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                      <XAxis dataKey="name" stroke="#ffffff20" tick={{ fontSize: 9, fontWeight: 700, fill: "#ffffff30" }} axisLine={false} tickLine={false} dy={5} />
+                      <YAxis stroke="#ffffff20" tick={{ fontSize: 9, fontWeight: 700, fill: "#ffffff30" }} axisLine={false} tickLine={false} tickFormatter={(val) => `${val/1000}k`} />
+                      <Tooltip content={<CustomBarTooltip />} />
+                      <Bar dataKey="profit" fill="#10b981" radius={[10, 10, 0, 0]} barSize={30} />
+                    </BarChart>
+                  )}
+                </MeasuredChartFrame>
               )}
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 border border-white/5 shadow-xl">
             <SectionTitle
-              eyebrow="Visual Analytics"
-              title="Customer Value Breakdown"
-              pill="Pie Chart"
+              eyebrow="Client Intelligence"
+              title="Portfolio Value"
+              pill="Value Tiers"
             />
-            <p className="mt-2 text-xs leading-5 text-white/55">
-              Distribution of customers across value tiers.
-            </p>
-            <div className="mt-4 h-72">
+            <div className="mt-8 h-72 relative">
               {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading chart...
-                </div>
+                <div className="flex h-full items-center justify-center text-sm text-white/30 italic">Mapping portfolio...</div>
               ) : customerValuePieData.length === 0 ? (
-                <div className="flex h-full items-center justify-center rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-center text-sm text-white/70">
-                  No customer data available yet.
-                </div>
+                <div className="flex h-full items-center justify-center text-sm text-white/30 italic text-center">No client value data detected.</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={customerValuePieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={90}
-                      dataKey="value"
-                      paddingAngle={3}
-                    >
-                      {customerValuePieData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${entry.name}`}
-                          fill={["#fbbf24", "#38bdf8", "#a8a29e"][index % 3]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomPieTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <MeasuredChartFrame height={288}>
+                  {({ width, height }) => {
+                    const outer = Math.max(60, Math.min(width, height) / 3);
+                    const inner = Math.max(40, outer - 20);
+                    return (
+                      <PieChart width={width} height={height}>
+                        <Pie
+                          data={customerValuePieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={inner}
+                          outerRadius={outer}
+                          dataKey="value"
+                          paddingAngle={5}
+                          stroke="none"
+                        >
+                          {customerValuePieData.map((entry, index) => (
+                            <Cell
+                              key={`cell-${entry.name}`}
+                              fill={["#fbbf24", "#38bdf8", "#a8a29e"][index % 3]}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<CustomPieTooltip />} />
+                      </PieChart>
+                    );
+                  }}
+                </MeasuredChartFrame>
               )}
+            </div>
+            <div className="mt-4 flex flex-wrap justify-center gap-4 text-[9px] font-black uppercase tracking-widest text-white/30">
+              {["Premium", "High Value", "Regular"].map((tier, i) => (
+                <div key={tier} className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: ["#fbbf24", "#38bdf8", "#a8a29e"][i] }} />
+                  {tier}
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 border border-white/5 shadow-xl">
             <SectionTitle
-              eyebrow="Visual Analytics"
-              title="Discount Usage Summary"
-              pill="Pie Chart"
+              eyebrow="Yield Optimization"
+              title="Offer Adoption"
+              pill="Discount Mix"
             />
-            <p className="mt-2 text-xs leading-5 text-white/55">
-              Breakdown of discounts applied to sales.
-            </p>
-            <div className="mt-4 h-72">
+            <div className="mt-8 h-72">
               {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading chart...
-                </div>
+                <div className="flex h-full items-center justify-center text-sm text-white/30 italic">Computing adoption rates...</div>
               ) : discountUsagePieData.length === 0 ? (
-                <div className="flex h-full items-center justify-center rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-center text-sm text-white/70">
-                  No discount usage data yet.
-                </div>
+                <div className="flex h-full items-center justify-center text-sm text-white/30 italic text-center">No discount telemetry found.</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={discountUsagePieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={90}
-                      dataKey="value"
-                      paddingAngle={3}
-                    >
-                      {discountUsagePieData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${entry.name}`}
-                          fill={["#94a3b8", "#a78bfa", "#f472b6", "#fb923c", "#34d399"][index % 5]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomPieTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <MeasuredChartFrame height={288}>
+                  {({ width, height }) => {
+                    const outer = Math.max(60, Math.min(width, height) / 3);
+                    const inner = Math.max(40, outer - 20);
+                    return (
+                      <PieChart width={width} height={height}>
+                        <Pie
+                          data={discountUsagePieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={inner}
+                          outerRadius={outer}
+                          dataKey="value"
+                          paddingAngle={5}
+                          stroke="none"
+                        >
+                          {discountUsagePieData.map((entry, index) => (
+                            <Cell
+                              key={`cell-${entry.name}`}
+                              fill={["#94a3b8", "#a78bfa", "#f472b6", "#fb923c", "#34d399"][index % 5]}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<CustomPieTooltip />} />
+                      </PieChart>
+                    );
+                  }}
+                </MeasuredChartFrame>
               )}
             </div>
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-2">
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+        <div className="grid gap-6 xl:grid-cols-2 mb-10">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
             <SectionTitle
-              eyebrow="Sales Insights"
-              title="Top Selling Items"
-              pill="Top 5"
+              eyebrow="Market Velocity"
+              title="Top Performing Assets"
+              pill="High Demand"
             />
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-8 space-y-4">
               {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading sales insights...
+                <div className="flex h-40 items-center justify-center rounded-3xl bg-white/5 text-sm text-white/30 italic">
+                  Mapping sales performance...
                 </div>
               ) : salesAnalytics.topSellingItems.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  No sales data available yet.
+                <div className="flex h-40 items-center justify-center rounded-3xl bg-white/5 text-sm text-white/30 italic">
+                  No sales telemetry available.
                 </div>
               ) : (
                 salesAnalytics.topSellingItems.map((item, index) => (
                   <div
                     key={`${item.sku}-${index}`}
-                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                    className="group rounded-3xl bg-white/[0.02] ring-1 ring-white/5 p-5 hover:bg-white/[0.05] hover:ring-white/10 transition-all duration-300"
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="text-sm text-white/60">#{index + 1}</div>
-                        <div className="mt-1 font-semibold text-white break-words">
-                          {item.itemName}
+                    <div className="flex items-center justify-between gap-6">
+                      <div className="flex items-center gap-5 min-w-0">
+                        <div className="h-12 w-12 rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-500/20 flex items-center justify-center text-indigo-400 font-black text-xs shrink-0 group-hover:scale-110 transition-transform">
+                          {String(index + 1).padStart(2, '0')}
                         </div>
-                        <div className="text-xs text-white/60">SKU: {item.sku}</div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-black text-white truncate group-hover:text-indigo-300 transition-colors">
+                            {item.itemName}
+                          </div>
+                          <div className="text-[10px] font-black uppercase tracking-widest text-white/30 mt-1">SKU: {item.sku}</div>
+                        </div>
                       </div>
 
                       <div className="text-right shrink-0">
-                        <div className="text-sm font-semibold text-white">
-                          {item.totalUnits} units
+                        <div className="text-sm font-black text-white">
+                          {item.totalUnits} <span className="text-[10px] text-white/30 uppercase tracking-widest ml-1">Units</span>
                         </div>
-                        <div className="text-xs text-white/60">
+                        <div className="text-[11px] font-bold text-emerald-400 mt-1">
                           {formatCurrency(item.totalRevenue)}
-                        </div>
-                        <div className="text-xs text-white/50">
-                          {item.transactions} transaction(s)
                         </div>
                       </div>
                     </div>
@@ -1523,21 +1613,21 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
             <SectionTitle
-              eyebrow="Recent Activity"
-              title="Latest Sales Transactions"
-              pill="Recent 5"
+              eyebrow="Operational Log"
+              title="Recent Transactions"
+              pill="Live Stream"
             />
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-8 space-y-4">
               {salesLoading ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Loading recent sales...
+                <div className="flex h-40 items-center justify-center rounded-3xl bg-white/5 text-sm text-white/30 italic">
+                  Synchronizing transaction log...
                 </div>
               ) : salesAnalytics.recentSales.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  No recent sales found.
+                <div className="flex h-40 items-center justify-center rounded-3xl bg-white/5 text-sm text-white/30 italic">
+                  No recent operational activity detected.
                 </div>
               ) : (
                 salesAnalytics.recentSales.map((sale) => {
@@ -1548,32 +1638,29 @@ export default function AdminDashboard() {
                   return (
                     <div
                       key={sale.id}
-                      className={`rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 ${isCancelled ? "opacity-60" : ""}`}
+                      className={cx(
+                        "group rounded-3xl bg-white/[0.02] ring-1 ring-white/5 p-5 transition-all duration-300",
+                        isCancelled ? "opacity-40 grayscale" : "hover:bg-white/[0.05] hover:ring-white/10"
+                      )}
                     >
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center justify-between gap-6">
                         <div className="min-w-0">
-                          <div className="font-semibold text-white truncate">
-                            {getSaleItemSummary(sale) || "Unknown Item"}
+                          <div className="text-sm font-black text-white truncate">
+                            {getSaleItemSummary(sale) || "Unidentified Asset"}
                           </div>
-                          <div className="text-xs text-white/60">Inv: {sale.invoiceNumber}</div>
-                          <div className="mt-1 flex items-center gap-2">
-                            {isCancelled ? <span className="inline-block px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 text-[9px] font-bold uppercase tracking-wider">Cancelled</span> :
-                             isReturned ? <span className="inline-block px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[9px] font-bold uppercase tracking-wider">Returned</span> :
-                             isPartial ? <span className="inline-block px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold uppercase tracking-wider">Partial Ret</span> : null}
-                            <div className="text-xs text-white/50 break-all">
-                              Sold by {sale.soldByEmail || "-"}
-                            </div>
+                          <div className="flex items-center gap-3 mt-2">
+                            <span className="text-[9px] font-black uppercase tracking-widest text-white/30">INV-{sale.invoiceNumber}</span>
+                            {isCancelled && <span className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 text-[8px] font-black uppercase tracking-[0.2em] ring-1 ring-red-500/20">Cancelled</span>}
+                            {isReturned && <span className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[8px] font-black uppercase tracking-[0.2em] ring-1 ring-purple-500/20">Returned</span>}
+                            {isPartial && <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 text-[8px] font-black uppercase tracking-[0.2em] ring-1 ring-amber-500/20">Partial</span>}
                           </div>
                         </div>
 
                         <div className="text-right shrink-0">
-                          <div className="text-sm font-semibold text-white">
-                            {getSaleQuantity(sale)} unit(s)
+                          <div className="text-sm font-black text-white">
+                            {isCancelled ? <span className="line-through text-white/20">{formatCurrency(getSaleTotal(sale))}</span> : formatCurrency(sale.finalTotalAfterReturn ?? getSaleTotal(sale))}
                           </div>
-                          <div className="text-xs text-white/60">
-                            {isCancelled ? <span className="line-through">{formatCurrency(getSaleTotal(sale))}</span> : formatCurrency(sale.finalTotalAfterReturn ?? getSaleTotal(sale))}
-                          </div>
-                          <div className="mt-1 text-xs text-white/50">
+                          <div className="text-[9px] font-black uppercase tracking-widest text-white/20 mt-1.5">
                             {formatDate(sale.soldAt)}
                           </div>
                         </div>
@@ -1586,87 +1673,71 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-2">
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+        <div className="grid gap-6 xl:grid-cols-2 mb-10">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
             <SectionTitle
-              eyebrow="AI Insights"
-              title="Smart Business Signals"
-              pill={`${aiInsights.insights.length} insights`}
+              eyebrow="Intelligence Synthesis"
+              title="Business Signals"
+              pill={`${aiInsights.insights.length} active`}
             />
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-8 space-y-4">
               {aiInsights.insights.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Not enough sales and inventory data yet to generate insights.
+                <div className="flex h-32 items-center justify-center rounded-3xl bg-white/5 text-xs text-white/30 italic text-center px-10">
+                  Awaiting sufficient data volume for signal synthesis.
                 </div>
               ) : (
                 aiInsights.insights.map((insight, index) => (
                   <div
                     key={`${insight.title}-${index}`}
-                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                    className="rounded-3xl bg-white/[0.02] ring-1 ring-white/5 p-6 hover:bg-white/[0.04] transition-all"
                   >
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Pill
-                        className={
-                          insight.type === "warning"
-                            ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
-                            : insight.type === "success"
-                            ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
-                            : "bg-blue-500/15 text-blue-200 ring-blue-500/20"
-                        }
-                      >
-                        {insight.type === "warning"
-                          ? "Warning"
-                          : insight.type === "success"
-                          ? "Opportunity"
-                          : "Insight"}
-                      </Pill>
-
-                      <div className="font-semibold text-white">{insight.title}</div>
+                    <div className="flex items-center gap-4 mb-4">
+                      <div className={cx(
+                        "h-2 w-2 rounded-full",
+                        insight.type === "warning" ? "bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.5)]" :
+                        insight.type === "success" ? "bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]" :
+                        "bg-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.5)]"
+                      )} />
+                      <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/70">{insight.title}</div>
                     </div>
-
-                    <div className="mt-2 text-sm leading-6 text-white/75">{insight.text}</div>
+                    <div className="text-sm leading-relaxed text-white/50 font-medium">{insight.text}</div>
                   </div>
                 ))
               )}
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
             <SectionTitle
-              eyebrow="AI Recommendations"
-              title="Suggested Next Actions"
-              pill={`${aiInsights.recommendations.length} actions`}
+              eyebrow="Executive Directives"
+              title="Strategic Recommendations"
+              pill={`${aiInsights.recommendations.length} primary`}
             />
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-8 space-y-4">
               {aiInsights.recommendations.length === 0 ? (
-                <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-4 text-sm text-white/70">
-                  Add more inventory and sales data to get action recommendations.
+                <div className="flex h-32 items-center justify-center rounded-3xl bg-white/5 text-xs text-white/30 italic text-center px-10">
+                  Add operational telemetry to unlock strategic recommendations.
                 </div>
               ) : (
                 aiInsights.recommendations.map((rec, index) => (
                   <div
                     key={`${rec.title}-${index}`}
-                    className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4"
+                    className="rounded-3xl bg-white/[0.02] ring-1 ring-white/5 p-6 hover:bg-white/[0.04] transition-all"
                   >
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Pill
-                        className={
-                          rec.priority === "High"
-                            ? "bg-red-500/15 text-red-200 ring-red-500/20"
-                            : rec.priority === "Medium"
-                            ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
-                            : "bg-slate-500/20 text-slate-200 ring-slate-400/20"
-                        }
-                      >
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/70">{rec.title}</div>
+                      <span className={cx(
+                        "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest",
+                        rec.priority === "High" ? "bg-red-500/10 text-red-400" :
+                        rec.priority === "Medium" ? "bg-amber-500/10 text-amber-400" :
+                        "bg-slate-500/10 text-slate-400"
+                      )}>
                         {rec.priority} Priority
-                      </Pill>
-
-                      <div className="font-semibold text-white">{rec.title}</div>
+                      </span>
                     </div>
-
-                    <div className="mt-2 text-sm leading-6 text-white/75">{rec.text}</div>
+                    <div className="text-sm leading-relaxed text-white/50 font-medium">{rec.text}</div>
                   </div>
                 ))
               )}
@@ -1674,100 +1745,108 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <div className="grid gap-6">
-          <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="grid gap-6 xl:grid-cols-2 mb-10">
+          <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+            <div className="flex items-center justify-between gap-6 mb-8 flex-wrap">
               <SectionTitle
-                eyebrow="System Alerts"
-                title="Notifications Preview"
-                pill={notificationsLoading ? "Loading..." : `${[...lowStockPreviewAlerts, ...notifications].length} recent`}
+                eyebrow="System Intelligence"
+                title="Active Notifications"
+                pill={notificationsLoading ? "Synchronizing..." : `${[...lowStockPreviewAlerts, ...notifications].length} Live`}
               />
               <Link to="/notifications">
-                <SecondaryButton>View All</SecondaryButton>
+                <SecondaryButton className="!py-2 !px-4 !text-[9px]">Archive</SecondaryButton>
               </Link>
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-4">
               {notificationsLoading ? (
-                <div className="col-span-full rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 text-sm text-white/70">
-                  Loading notifications...
+                <div className="rounded-3xl bg-white/5 p-6 text-sm text-white/30 italic text-center">
+                  Fetching system telemetry...
                 </div>
               ) : [...lowStockPreviewAlerts, ...notifications].length === 0 ? (
-                <div className="col-span-full rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 text-sm text-white/70">
-                  No notifications available.
+                <div className="rounded-3xl bg-white/5 p-6 text-sm text-white/30 italic text-center">
+                  No active system alerts detected.
                 </div>
               ) : (
                 [...lowStockPreviewAlerts, ...notifications].slice(0, 3).map((notif) => (
                   <div
                     key={notif.id}
-                    className={`rounded-2xl ring-1 p-4 flex flex-col justify-between ${
+                    className={cx(
+                      "group rounded-3xl ring-1 p-5 transition-all duration-300",
                       notif.id?.startsWith("low-stock-")
-                        ? "bg-amber-500/[0.05] ring-amber-500/20"
+                        ? "bg-amber-500/[0.03] ring-amber-500/20 hover:bg-amber-500/[0.06]"
                         : notif.isRead
-                        ? "bg-white/[0.02] ring-white/10 opacity-70"
-                        : "bg-white/5 ring-white/20 shadow-lg"
-                    }`}
+                        ? "bg-white/[0.01] ring-white/5 opacity-50"
+                        : "bg-white/[0.04] ring-white/10 hover:bg-white/[0.06] shadow-lg"
+                    )}
                   >
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        {!notif.isRead && <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />}
-                        <span className="font-semibold text-white truncate text-sm">{notif.title}</span>
+                    <div className="flex items-start gap-4">
+                      <div className="pt-1">
+                        {!notif.isRead && <div className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] animate-pulse" />}
                       </div>
-                      <p className="text-xs text-white/70 line-clamp-2">{notif.message}</p>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-black text-white truncate group-hover:text-white transition-colors">{notif.title}</div>
+                        <p className="mt-1 text-[13px] text-white/40 font-medium line-clamp-2 leading-relaxed">{notif.message}</p>
+                        <div className="mt-4 text-[9px] font-black uppercase tracking-widest text-white/20">{formatDate(notif.createdAt)}</div>
+                      </div>
                     </div>
-                    <div className="mt-3 text-xs text-white/50">{formatDate(notif.createdAt)}</div>
                   </div>
                 ))
               )}
             </div>
           </div>
-        </div>
 
-        {/* ── Suspicious Activity Preview ─────────────────────────────────── */}
-        <div className="grid gap-6">
-          <div className="rounded-3xl bg-gradient-to-br from-red-500/[0.07] to-amber-500/[0.04] ring-1 ring-red-500/20 p-5 sm:p-6">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="rounded-[2.5rem] bg-gradient-to-br from-red-500/[0.05] via-slate-900 to-transparent ring-1 ring-red-500/20 p-8 sm:p-10 border border-white/5 shadow-2xl">
+            <div className="flex items-center justify-between gap-6 mb-8 flex-wrap">
               <SectionTitle
-                eyebrow="Security Monitoring"
-                title="Suspicious Activity Preview"
-                pill={`${anomalyAlerts.length} recent`}
+                eyebrow="Sentinel Protocol"
+                title="Security Anomalies"
+                pill={`${anomalyAlerts.length} Detected`}
               />
               <Link to="/notifications">
-                <SecondaryButton>View All Anomalies</SecondaryButton>
+                <SecondaryButton className="!py-2 !px-4 !text-[9px]">Audit Log</SecondaryButton>
               </Link>
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-4">
               {anomalyAlerts.length === 0 ? (
-                <div className="col-span-full rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 text-sm text-white/70 text-center">
-                  ✅ No suspicious activity detected yet. The system is monitoring sales, returns, cancellations, and admin actions.
+                <div className="rounded-3xl bg-emerald-500/5 ring-1 ring-emerald-500/10 p-10 text-center">
+                  <div className="text-2xl mb-4">🛡️</div>
+                  <div className="text-sm font-black text-emerald-400 uppercase tracking-widest">Protocol Nominal</div>
+                  <p className="mt-2 text-xs text-white/30 font-medium leading-relaxed">No suspicious patterns detected in recent operations.</p>
                 </div>
               ) : (
-                anomalyAlerts.map((alert) => {
-                  const severityStyle =
-                    alert.severity === "high"
-                      ? "bg-red-500/10 ring-red-500/25"
-                      : alert.severity === "medium"
-                      ? "bg-amber-500/10 ring-amber-500/20"
-                      : "bg-white/5 ring-white/10";
-                  const severityBadge =
-                    alert.severity === "high"
-                      ? "bg-red-500/20 text-red-300"
-                      : alert.severity === "medium"
-                      ? "bg-amber-500/20 text-amber-300"
-                      : "bg-slate-500/20 text-slate-300";
+                anomalyAlerts.slice(0, 3).map((alert) => {
+                  const isHigh = alert.severity === "high";
                   return (
-                    <div key={alert.id} className={`rounded-2xl ring-1 p-4 flex flex-col justify-between ${severityStyle}`}>
-                      <div>
-                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${severityBadge}`}>
-                            {alert.severity || "low"}
-                          </span>
-                          <span className="font-semibold text-white text-sm truncate">{alert.title}</span>
+                    <div 
+                      key={alert.id} 
+                      className={cx(
+                        "group rounded-3xl ring-1 p-5 transition-all duration-300",
+                        isHigh ? "bg-red-500/[0.05] ring-red-500/20 hover:bg-red-500/[0.08]" : "bg-white/[0.04] ring-white/10 hover:bg-white/[0.06]"
+                      )}
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className={cx(
+                          "h-10 w-10 rounded-2xl flex items-center justify-center text-lg shadow-inner shrink-0",
+                          isHigh ? "bg-red-500/10 text-red-400 ring-1 ring-red-500/20" : "bg-white/5 text-white/30 ring-1 ring-white/10"
+                        )}>
+                          🚨
                         </div>
-                        <p className="text-xs text-white/70 line-clamp-2">{alert.message}</p>
+                        <div className="flex-1 min-w-0 pt-0.5">
+                          <div className="flex items-center gap-3 mb-2">
+                            <span className={cx(
+                              "text-[8px] font-black uppercase tracking-[0.2em] px-2 py-0.5 rounded-md ring-1",
+                              isHigh ? "bg-red-500/10 text-red-400 ring-red-500/20" : "bg-white/10 text-white/40 ring-white/10"
+                            )}>
+                              {alert.severity || "Standard"}
+                            </span>
+                          </div>
+                          <div className="text-sm font-black text-white group-hover:text-white transition-colors">{alert.title}</div>
+                          <p className="mt-2 text-[13px] text-white/40 font-medium line-clamp-2 leading-relaxed">{alert.message}</p>
+                          <div className="mt-4 text-[9px] font-black uppercase tracking-widest text-white/20">{formatDate(alert.createdAt)}</div>
+                        </div>
                       </div>
-                      <div className="mt-3 text-xs text-white/50">{formatDate(alert.createdAt)}</div>
                     </div>
                   );
                 })
@@ -1779,138 +1858,138 @@ export default function AdminDashboard() {
         {/* ── Level 2 Step 4: AI Business Summary ─────────────────────────── */}
         <AiSummaryPanel summary={aiSummary} />
 
-        <div className="flex gap-2 border-b border-white/10 pb-4 flex-wrap">
+        <div className="flex gap-4 border-b border-white/5 pb-6 flex-wrap mb-10">
           <button
             onClick={() => setActiveTab("inventory")}
-            className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+            className={cx(
+              "px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] transition-all duration-300",
               activeTab === "inventory"
-                ? "bg-white/15 text-white"
-                : "text-white/60 hover:text-white hover:bg-white/5"
-            }`}
+                ? "bg-white text-slate-950 shadow-xl"
+                : "text-white/40 hover:text-white hover:bg-white/5"
+            )}
           >
-            Inventory
+            Inventory Management
           </button>
 
           <button
             onClick={() => setActiveTab("users")}
-            className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+            className={cx(
+              "px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] transition-all duration-300",
               activeTab === "users"
-                ? "bg-white/15 text-white"
-                : "text-white/60 hover:text-white hover:bg-white/5"
-            }`}
+                ? "bg-white text-slate-950 shadow-xl"
+                : "text-white/40 hover:text-white hover:bg-white/5"
+            )}
           >
-            User Management
+            User Directory
           </button>
 
           <button
             onClick={() => setActiveTab("approvals")}
-            className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+            className={cx(
+              "px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] transition-all duration-300",
               activeTab === "approvals"
-                ? "bg-white/15 text-white"
-                : "text-white/60 hover:text-white hover:bg-white/5"
-            }`}
+                ? "bg-white text-slate-950 shadow-xl"
+                : "text-white/40 hover:text-white hover:bg-white/5"
+            )}
           >
-            Document Approvals
+            Security Clearances
           </button>
         </div>
 
         {activeTab === "inventory" && (
-          <>
-            <div className="grid gap-6 lg:grid-cols-12">
-              <div className="lg:col-span-7">
-                <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6 h-full flex flex-col">
-                  <div className="flex items-center justify-between gap-3">
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-10 lg:grid-cols-12 mb-10">
+              <div className="lg:col-span-8">
+                <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl h-full">
+                  <div className="flex items-center justify-between gap-6 mb-10 flex-wrap">
                     <div>
-                      <div className="text-sm text-white/70">
-                        {mode === "add" ? "Add new item" : "Edit item"}
-                      </div>
-                      <div className="mt-1 text-lg font-semibold text-white">
-                        {mode === "add" ? "Create inventory item" : "Update inventory item"}
-                      </div>
+                      <Pill className="mb-3">{mode === "add" ? "Creation Engine" : "Modification Mode"}</Pill>
+                      <h3 className="text-2xl font-black text-white tracking-tight">
+                        {mode === "add" ? "Create Inventory Asset" : "Update Asset Registry"}
+                      </h3>
                     </div>
 
-                    <div className="flex gap-2">
-                      {mode === "edit" ? (
+                    <div className="flex gap-3">
+                      {mode === "edit" && (
                         <button
                           onClick={resetForm}
-                          className="rounded-2xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-sm font-semibold text-white hover:bg-white/10"
+                          className="px-6 py-3 rounded-2xl bg-white/5 ring-1 ring-white/10 text-[10px] font-black uppercase tracking-widest text-white/50 hover:bg-white/10 transition-all"
                         >
-                          Cancel edit
+                          Cancel
                         </button>
-                      ) : null}
+                      )}
                       <button
                         onClick={() => setShowBulkImport(true)}
-                        className="rounded-2xl bg-indigo-500/80 ring-1 ring-indigo-500/50 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition"
+                        className="px-6 py-3 rounded-2xl bg-indigo-500 text-white text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 shadow-lg shadow-indigo-500/20 transition-all"
                       >
-                        📂 Import CSV
+                        📂 CSV Import
                       </button>
                     </div>
                   </div>
 
-                  <form onSubmit={onSubmit} className="mt-5 grid gap-4">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Item Name">
+                  <form onSubmit={onSubmit} className="grid gap-8">
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      <Field label="Asset Identity">
                         <Input
                           value={form.itemName}
                           onChange={(e) => setForm((p) => ({ ...p, itemName: e.target.value }))}
-                          placeholder="Milk Powder 400g"
+                          placeholder="Operational nomenclature..."
                           autoComplete="off"
                         />
                       </Field>
 
-                      <Field label="SKU">
+                      <Field label="Serial Reference (SKU)">
                         <Input
                           value={form.sku}
                           onChange={(e) => setForm((p) => ({ ...p, sku: e.target.value }))}
-                          placeholder="MILK-001"
+                          placeholder="Unique identifier..."
                           autoComplete="off"
                         />
                       </Field>
                     </div>
 
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Category">
+                    <div className="grid gap-6 sm:grid-cols-2">
+                      <Field label="Resource Category">
                         <Input
                           value={form.category}
                           onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-                          placeholder="Groceries"
+                          placeholder="Classification..."
                           autoComplete="off"
                         />
                       </Field>
 
-                      {/* Supplier linked selector */}
-                      <Field label="Supplier">
+                      <Field label="Supply Chain Partner">
                         {selectedSupplier ? (
-                          <div className="rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-500/20 px-3 py-2 flex items-center justify-between gap-2">
+                          <div className="rounded-2xl bg-indigo-500/5 ring-1 ring-indigo-500/20 px-4 py-3 flex items-center justify-between gap-4 group">
                             <div>
-                              <div className="text-sm font-semibold text-white">{selectedSupplier.name}</div>
-                              {selectedSupplier.phone && <div className="text-xs text-white/50">{selectedSupplier.phone}</div>}
+                              <div className="text-sm font-black text-white">{selectedSupplier.name}</div>
+                              {selectedSupplier.phone && <div className="text-[10px] font-bold text-white/30 mt-1 uppercase tracking-widest">{selectedSupplier.phone}</div>}
                             </div>
                             <button
                               type="button"
                               onClick={() => { setSelectedSupplier(null); setSupplierSearch(""); setForm((p) => ({ ...p, supplier: "" })); }}
-                              className="rounded-lg bg-white/5 ring-1 ring-white/15 px-2 py-0.5 text-xs font-semibold text-white/70 hover:bg-white/10 shrink-0"
-                            >Clear</button>
+                              className="px-3 py-1 rounded-xl bg-white/5 ring-1 ring-white/10 text-[9px] font-black uppercase tracking-widest text-white/40 hover:bg-red-500/10 hover:text-red-400 hover:ring-red-500/20 transition-all"
+                            >Release</button>
                           </div>
                         ) : (
                           <div className="relative">
                             <Input
                               value={supplierSearch}
                               onChange={(e) => { setSupplierSearch(e.target.value); setForm((p) => ({ ...p, supplier: e.target.value })); }}
-                              placeholder="Search or type supplier name…"
+                              placeholder="Search partner directory..."
                               autoComplete="off"
                             />
                             {supplierSearch.trim() && suppliers.filter((s) => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).length > 0 && (
-                              <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-2xl bg-slate-800 ring-1 ring-white/15 shadow-2xl overflow-hidden">
+                              <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-[1.5rem] bg-slate-900 ring-1 ring-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden border border-white/5">
                                 {suppliers.filter((s) => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).slice(0, 5).map((s) => (
                                   <button
                                     key={s.id}
                                     type="button"
                                     onClick={() => { setSelectedSupplier(s); setSupplierSearch(""); setForm((p) => ({ ...p, supplier: s.name })); }}
-                                    className="w-full text-left px-4 py-2.5 hover:bg-white/10 border-b border-white/5 last:border-0 text-sm text-white"
+                                    className="w-full text-left px-6 py-4 hover:bg-white/[0.05] border-b border-white/5 last:border-0 transition-colors"
                                   >
-                                    <div className="font-medium">{s.name}</div>
-                                    {s.contactPerson && <div className="text-xs text-white/50">{s.contactPerson} {s.phone && `· ${s.phone}`}</div>}
+                                    <div className="text-sm font-black text-white">{s.name}</div>
+                                    {s.contactPerson && <div className="text-[10px] font-bold text-white/30 mt-1 uppercase tracking-widest">{s.contactPerson} {s.phone && `· ${s.phone}`}</div>}
                                   </button>
                                 ))}
                               </div>
@@ -1920,8 +1999,8 @@ export default function AdminDashboard() {
                       </Field>
                     </div>
 
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                      <Field label="Quantity">
+                    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                      <Field label="Inventory Level">
                         <Input
                           type="number"
                           value={form.quantity}
@@ -1929,49 +2008,43 @@ export default function AdminDashboard() {
                         />
                       </Field>
 
-                      <Field label="Min Stock Level">
+                      <Field label="Critical Minimum">
                         <Input
                           type="number"
                           value={form.minStockLevel}
-                          onChange={(e) =>
-                            setForm((p) => ({ ...p, minStockLevel: e.target.value }))
-                          }
+                          onChange={(e) => setForm((p) => ({ ...p, minStockLevel: e.target.value }))}
                         />
                       </Field>
 
-                      <Field label="Buying Price">
+                      <Field label="Acquisition Cost">
                         <Input
                           type="number"
                           value={form.buyingPrice}
-                          onChange={(e) =>
-                            setForm((p) => ({ ...p, buyingPrice: e.target.value }))
-                          }
+                          onChange={(e) => setForm((p) => ({ ...p, buyingPrice: e.target.value }))}
                         />
                       </Field>
 
-                      <Field label="Selling Price">
+                      <Field label="Market Value">
                         <Input
                           type="number"
                           value={form.sellingPrice}
-                          onChange={(e) =>
-                            setForm((p) => ({ ...p, sellingPrice: e.target.value }))
-                          }
+                          onChange={(e) => setForm((p) => ({ ...p, sellingPrice: e.target.value }))}
                         />
                       </Field>
                     </div>
 
-                    <Field label="Location">
+                    <Field label="Registry Location">
                       <Input
                         value={form.location}
                         onChange={(e) => setForm((p) => ({ ...p, location: e.target.value }))}
-                        placeholder="Rack A1"
+                        placeholder="Storage sector..."
                         autoComplete="off"
                       />
                     </Field>
 
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2 pt-6">
                       <PrimaryButton type="submit" disabled={busy}>
-                        {busy ? "Saving..." : mode === "add" ? "Add Item" : "Save Changes"}
+                        {busy ? "Processing..." : mode === "add" ? "Deploy Asset" : "Commit Changes"}
                       </PrimaryButton>
 
                       <SecondaryButton
@@ -1982,303 +2055,164 @@ export default function AdminDashboard() {
                           setMsg("");
                         }}
                       >
-                        Reset
+                        Clear Terminal
                       </SecondaryButton>
                     </div>
 
-                    {msg ? (
-                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
+                    {msg && (
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 px-6 py-4 text-xs font-bold text-white/50 italic animate-in fade-in zoom-in-95 duration-300">
                         {msg}
                       </div>
-                    ) : null}
+                    )}
                   </form>
                 </div>
               </div>
 
-              <div className="lg:col-span-5 flex flex-col gap-6 h-full">
-                <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col gap-4 flex-1">
-                  <div className="w-full">
-                    <div className="text-sm text-white/70">Search Inventory</div>
-                    <div className="mt-2">
-                      <Input
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search by item / sku / category / supplier..."
-                      />
+              <div className="lg:col-span-4 flex flex-col gap-6">
+                <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl flex flex-col gap-8 flex-1">
+                  <div>
+                    <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40 mb-4">Search Registry</div>
+                    <Input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Identify specific assets..."
+                      className="!bg-white/5"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 flex-1">
+                    <MetricCard 
+                      label="Active Records" 
+                      value={items.length} 
+                      sub="Registry count" 
+                      color="indigo"
+                    />
+                    <MetricCard 
+                      label="Critical Alerts" 
+                      value={lowStockCount} 
+                      sub="Depleted stock" 
+                      color="amber"
+                      alert={lowStockCount > 0}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-xl">
+                  <div className="space-y-6">
+                    <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40">Operational Guidelines</div>
+                    <div className="grid gap-4">
+                      <div className="text-xs font-medium text-white/40 leading-relaxed pl-4 border-l-2 border-indigo-500/20">
+                        Maintain unique SKU references for absolute tracking.
+                      </div>
+                      <div className="text-xs font-medium text-white/40 leading-relaxed pl-4 border-l-2 border-indigo-500/20">
+                        Acquisition and market values drive margin synthesis.
+                      </div>
+                      <div className="text-xs font-medium text-white/40 leading-relaxed pl-4 border-l-2 border-indigo-500/20">
+                        Critical minimums trigger automated replenishment signals.
+                      </div>
                     </div>
                   </div>
-
-                  <div className="mt-auto w-full grid gap-3 sm:grid-cols-2">
-                    <Card title={`${items.length} items`} desc="Total inventory records." />
-                    <Card title={`${lowStockCount} low`} desc="Needs replenishment." />
-                  </div>
-                </div>
-
-                <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6">
-                  <div className="grid gap-3">
-                    <Pill>Inventory Guidelines</Pill>
-                    <Card title="SKU Control" desc="Keep every SKU unique for accurate tracking." />
-                    <Card
-                      title="Pricing"
-                      desc="Buying and selling prices support future business analytics."
-                    />
-                    <Card
-                      title="Low Stock"
-                      desc="Items at or below minimum stock should be reordered."
-                    />
-                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-12">
-              <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
+            <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl min-w-0">
+              <div className="flex items-center justify-between gap-6 mb-8 flex-wrap">
                 <SectionTitle
-                  eyebrow="Inventory Table"
-                  title="Live Inventory Records"
-                  pill={`${filteredItems.length} showing`}
+                  eyebrow="Asset Ledger"
+                  title="Live Inventory Registry"
+                  pill={`${filteredItems.length} Records`}
                 />
-
-                <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                  <table className="min-w-[1100px] w-full text-sm">
-                    <thead className="bg-white/5 text-white/70">
-                      <tr>
-                        <th className="text-left font-semibold px-4 py-3">Item</th>
-                        <th className="text-left font-semibold px-4 py-3">SKU</th>
-                        <th className="text-left font-semibold px-4 py-3">Category</th>
-                        <th className="text-left font-semibold px-4 py-3">Supplier</th>
-                        <th className="text-left font-semibold px-4 py-3">Location</th>
-                        <th className="text-right font-semibold px-4 py-3">Qty</th>
-                        <th className="text-right font-semibold px-4 py-3">Min</th>
-                        <th className="text-right font-semibold px-4 py-3">Buy</th>
-                        <th className="text-right font-semibold px-4 py-3">Sell</th>
-                        <th className="text-left font-semibold px-4 py-3">Status</th>
-                        <th className="text-right font-semibold px-4 py-3">Actions</th>
-                      </tr>
-                    </thead>
-
-                    <tbody className="divide-y divide-white/10">
-                      {loading ? (
-                        <tr>
-                          <td className="px-4 py-4 text-white/70" colSpan={11}>
-                            Loading...
-                          </td>
-                        </tr>
-                      ) : filteredItems.length === 0 ? (
-                        <tr>
-                          <td className="px-4 py-4 text-white/70" colSpan={11}>
-                            No inventory items found.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredItems.map((it) => {
-                          const qty = sanitizeNumber(it.quantity);
-                          const min = sanitizeNumber(it.minStockLevel);
-                          const low = qty <= min;
-
-                          return (
-                            <tr key={it.id} className="text-white/85 align-top">
-                              <td className="px-4 py-3">{it.itemName}</td>
-                              <td className="px-4 py-3">{it.sku}</td>
-                              <td className="px-4 py-3">{it.category}</td>
-                              <td className="px-4 py-3">{it.supplier || "-"}</td>
-                              <td className="px-4 py-3">{it.location || "-"}</td>
-                              <td className="px-4 py-3 text-right">{qty}</td>
-                              <td className="px-4 py-3 text-right">{min}</td>
-                              <td className="px-4 py-3 text-right">
-                                {formatCurrency(it.buyingPrice)}
-                              </td>
-                              <td className="px-4 py-3 text-right">
-                                {formatCurrency(it.sellingPrice)}
-                              </td>
-                              <td className="px-4 py-3">
-                                <span
-                                  className={
-                                    "inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 " +
-                                    (low
-                                      ? "bg-amber-500/15 text-amber-200 ring-amber-500/20"
-                                      : "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20")
-                                  }
-                                >
-                                  {low ? "Low Stock" : "OK"}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex justify-end gap-2">
-                                  <button
-                                    onClick={() => startEdit(it)}
-                                    disabled={busy}
-                                    className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-60"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => onDelete(it)}
-                                    disabled={busy}
-                                    className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-60"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="mt-3 text-xs text-white/50">
-                  Tip: Low stock status is triggered when quantity is less than or equal to
-                  minimum stock level.
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {activeTab === "users" && (
-          <div className="grid gap-6 lg:grid-cols-12">
-            <div className="lg:col-span-5 flex flex-col gap-6">
-              <div className="rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-5 sm:p-6">
-                <SectionTitle
-                  eyebrow="Security-focused user management"
-                  title="Role & Status Control"
-                />
-
-                <div className="mt-4 grid gap-3">
-                  <Card
-                    title="No fake account creation"
-                    desc="Users must self-register. Admin only changes role and status."
-                  />
-                  <Card
-                    title="Disable instead of delete"
-                    desc="For safety and auditability, accounts should be disabled instead of deleted."
-                  />
-                  <Card
-                    title="Least privilege"
-                    desc="Grant admin role only when absolutely necessary."
-                  />
-                </div>
-
-                {userMsg ? (
-                  <div className="mt-4 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
-                    {userMsg}
-                  </div>
-                ) : null}
               </div>
 
-              <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6">
-                <div className="text-sm text-white/70">Search Users</div>
-                <div className="mt-2">
-                  <Input
-                    value={userSearch}
-                    onChange={(e) => setUserSearch(e.target.value)}
-                    placeholder="Search by name / email / role / status..."
-                  />
-                </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <Card title={`${usersList.length} users`} desc="Total registered profiles." />
-                  <Card
-                    title={`${usersList.filter((u) => u.role === "admin").length} admins`}
-                    desc="High privilege users."
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="lg:col-span-7 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
-              <SectionTitle
-                eyebrow="Registered Users"
-                title="Role & Status Management"
-                pill={`${filteredUsers.length} showing`}
-              />
-
-              <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                <table className="min-w-[850px] w-full text-sm">
-                  <thead className="bg-white/5 text-white/70">
-                    <tr>
-                      <th className="text-left font-semibold px-4 py-3">Name</th>
-                      <th className="text-left font-semibold px-4 py-3">Email</th>
-                      <th className="text-left font-semibold px-4 py-3">Role</th>
-                      <th className="text-left font-semibold px-4 py-3">Status</th>
-                      <th className="text-right font-semibold px-4 py-3">Actions</th>
+              <div className="overflow-x-auto -mx-2 px-2">
+                <table className="w-full text-left border-separate border-spacing-y-2">
+                  <thead>
+                    <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                      <th className="px-6 py-4">Asset nomenclature</th>
+                      <th className="px-4 py-4 text-center">SKU</th>
+                      <th className="px-4 py-4 text-center">Classification</th>
+                      <th className="px-4 py-4 text-center">Source</th>
+                      <th className="px-4 py-4 text-center">Level</th>
+                      <th className="px-4 py-4 text-center">Acquisition</th>
+                      <th className="px-4 py-4 text-center">Valuation</th>
+                      <th className="px-4 py-4 text-center">Status</th>
+                      <th className="px-6 py-4 text-right">Directives</th>
                     </tr>
                   </thead>
 
-                  <tbody className="divide-y divide-white/10">
-                    {usersLoading ? (
+                  <tbody className="divide-y divide-transparent">
+                    {loading ? (
                       <tr>
-                        <td className="px-4 py-4 text-white/70" colSpan={5}>
-                          Loading users...
+                        <td className="px-6 py-10 text-[13px] font-medium text-white/20 italic text-center" colSpan={9}>
+                          Synchronizing asset data...
                         </td>
                       </tr>
-                    ) : filteredUsers.length === 0 ? (
+                    ) : filteredItems.length === 0 ? (
                       <tr>
-                        <td className="px-4 py-4 text-white/70" colSpan={5}>
-                          No users found.
+                        <td className="px-6 py-10 text-[13px] font-medium text-white/20 italic text-center" colSpan={9}>
+                          No operational assets detected in current registry.
                         </td>
                       </tr>
                     ) : (
-                      filteredUsers.map((u) => {
-                        const isSelf = u.id === user.uid;
+                      filteredItems.map((it) => {
+                        const qty = sanitizeNumber(it.quantity);
+                        const min = sanitizeNumber(it.minStockLevel);
+                        const low = qty <= min;
 
                         return (
-                          <tr key={u.id} className="text-white/85 align-top">
-                            <td className="px-4 py-3">{u.name || "-"}</td>
-                            <td className="px-4 py-3 break-all">{u.email}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
-                                  u.role === "admin"
-                                    ? "bg-indigo-500/15 text-indigo-200 ring-indigo-500/20"
-                                    : "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
-                                }`}
-                              >
-                                {u.role || "staff"}
+                          <tr key={it.id} className="group hover:bg-white/[0.02] transition-colors">
+                            <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                              <div className="text-[13px] font-black text-white">{it.itemName}</div>
+                              <div className="text-[10px] font-black text-white/20 uppercase tracking-widest mt-1">{it.location || "Not assigned"}</div>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <span className="text-[11px] font-black text-white/40 uppercase tracking-widest bg-white/5 px-2 py-1 rounded-md">{it.sku}</span>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <span className="text-[11px] font-black text-white/40 uppercase tracking-widest">{it.category}</span>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <div className="text-[11px] font-black text-white/40 truncate max-w-[120px] mx-auto">{it.supplier || "—"}</div>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <div className={cx(
+                                "text-[13px] font-black",
+                                low ? "text-amber-400" : "text-white"
+                              )}>
+                                {qty}
+                                <span className="text-[9px] text-white/20 ml-1 uppercase tracking-widest">/ {min}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <div className="text-[11px] font-black text-white/40">{formatCurrency(it.buyingPrice)}</div>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <div className="text-[11px] font-black text-emerald-400/70">{formatCurrency(it.sellingPrice)}</div>
+                            </td>
+                            <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <span className={cx(
+                                "text-[8px] font-black uppercase tracking-[0.2em] px-2 py-1 rounded-md ring-1",
+                                low ? "bg-amber-500/10 text-amber-400 ring-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]" : "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20"
+                              )}>
+                                {low ? "Depleted" : "Healthy"}
                               </span>
                             </td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
-                                  (u.status || "active") === "active"
-                                    ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
-                                    : "bg-red-500/15 text-red-200 ring-red-500/20"
-                                }`}
-                              >
-                                {u.status || "active"}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex justify-end gap-2 flex-wrap">
+                            <td className="px-6 py-4 text-right bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors">
+                              <div className="flex justify-end gap-2">
                                 <button
-                                  disabled={isSelf}
-                                  onClick={() =>
-                                    handleUserRoleChange(
-                                      u,
-                                      (u.role || "staff") === "admin" ? "staff" : "admin"
-                                    )
-                                  }
-                                  className="rounded-xl bg-white/5 ring-1 ring-white/15 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-40"
+                                  onClick={() => startEdit(it)}
+                                  className="h-8 w-8 rounded-lg bg-white/5 ring-1 ring-white/10 flex items-center justify-center text-xs text-white/40 hover:bg-white/10 hover:text-white transition-all"
+                                  title="Edit"
                                 >
-                                  {(u.role || "staff") === "admin" ? "Make Staff" : "Make Admin"}
+                                  ✎
                                 </button>
-
                                 <button
-                                  disabled={isSelf}
-                                  onClick={() =>
-                                    handleUserStatusChange(
-                                      u,
-                                      (u.status || "active") === "active"
-                                        ? "disabled"
-                                        : "active"
-                                    )
-                                  }
-                                  className="rounded-xl bg-amber-500/15 ring-1 ring-amber-500/25 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-40"
+                                  onClick={() => onDelete(it)}
+                                  className="h-8 w-8 rounded-lg bg-white/5 ring-1 ring-white/10 flex items-center justify-center text-xs text-white/40 hover:bg-red-500/20 hover:text-red-400 hover:ring-red-500/30 transition-all"
+                                  title="Delete"
                                 >
-                                  {(u.status || "active") === "active" ? "Disable" : "Activate"}
+                                  ✕
                                 </button>
                               </div>
                             </td>
@@ -2293,140 +2227,274 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {activeTab === "approvals" && (
-          <>
-            <div className="grid gap-6 lg:grid-cols-12">
-              <div className="lg:col-span-12 flex flex-col gap-6">
-                <div className="rounded-3xl bg-white/[0.04] ring-1 ring-white/10 p-5 sm:p-6 flex flex-col md:flex-row items-center justify-between gap-4">
-                  <div className="w-full md:max-w-xs">
-                    <div className="text-sm text-white/70">Search Documents</div>
-                    <div className="mt-2">
-                      <Input
-                        value={docSearch}
-                        onChange={(e) => setDocSearch(e.target.value)}
-                        placeholder="Search by title / owner / status..."
-                      />
+        {activeTab === "users" && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-10 lg:grid-cols-12 mb-10">
+              <div className="lg:col-span-4 flex flex-col gap-6">
+                <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl">
+                  <SectionTitle
+                    eyebrow="Governance"
+                    title="Access Control"
+                  />
+
+                  <div className="mt-8 space-y-4">
+                    <div className="text-xs font-medium text-white/40 leading-relaxed pl-4 border-l-2 border-indigo-500/20">
+                      Users must self-register. System architects only govern roles.
+                    </div>
+                    <div className="text-xs font-medium text-white/40 leading-relaxed pl-4 border-l-2 border-indigo-500/20">
+                      Deactivate accounts instead of purging to preserve audit trails.
+                    </div>
+                    <div className="text-xs font-medium text-white/40 leading-relaxed pl-4 border-l-2 border-indigo-500/20">
+                      Grant administrative clearance only on a least-privilege basis.
                     </div>
                   </div>
 
-                  <div className="flex gap-3 flex-wrap">
-                    <Card title={`${docsList.length} total`} desc="Uploaded docs." />
-                    <Card
-                      title={`${docsList.filter((d) => d.status === "pending").length} pending`}
-                      desc="Awaiting approval."
+                  {userMsg && (
+                    <div className="mt-8 rounded-2xl bg-white/5 ring-1 ring-white/10 px-6 py-4 text-xs font-bold text-white/50 italic animate-pulse">
+                      {userMsg}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-xl flex flex-col gap-8">
+                  <div>
+                    <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40 mb-4">Identity Search</div>
+                    <Input
+                      value={userSearch}
+                      onChange={(e) => setUserSearch(e.target.value)}
+                      placeholder="Search credentials..."
                     />
+                  </div>
+
+                  <div className="grid gap-4">
+                    <MetricCard label="Total Identities" value={usersList.length} color="indigo" />
+                    <MetricCard label="Elevated Clearances" value={usersList.filter((u) => u.role === "admin").length} color="amber" />
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="grid gap-6 lg:grid-cols-12">
-              <div className="lg:col-span-12 rounded-3xl bg-white/[0.06] ring-1 ring-white/10 p-4 sm:p-6 min-w-0">
+              <div className="lg:col-span-8 rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl min-w-0">
                 <SectionTitle
-                  eyebrow="Document Workflow"
-                  title="Approve and Reject Requests"
-                  pill={`${filteredDocs.length} showing`}
+                  eyebrow="Personnel Directory"
+                  title="Credential Oversight"
+                  pill={`${filteredUsers.length} Active`}
                 />
 
-                {docMsg ? (
-                  <div className="mt-4 rounded-xl bg-white/5 ring-1 ring-white/10 px-4 py-3 text-sm text-white/80">
-                    {docMsg}
-                  </div>
-                ) : null}
-
-                <div className="mt-4 overflow-x-auto rounded-2xl ring-1 ring-white/10">
-                  <table className="min-w-[850px] w-full text-sm">
-                    <thead className="bg-white/5 text-white/70">
-                      <tr>
-                        <th className="text-left font-semibold px-4 py-3">Title</th>
-                        <th className="text-left font-semibold px-4 py-3">Owner</th>
-                        <th className="text-left font-semibold px-4 py-3">Status</th>
-                        <th className="text-right font-semibold px-4 py-3">Actions</th>
+                <div className="overflow-x-auto mt-8 -mx-2 px-2">
+                  <table className="w-full text-left border-separate border-spacing-y-2">
+                    <thead>
+                      <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                        <th className="px-6 py-4">Identity</th>
+                        <th className="px-4 py-4 text-center">Clearance</th>
+                        <th className="px-4 py-4 text-center">Operational Status</th>
+                        <th className="px-6 py-4 text-right">Directives</th>
                       </tr>
                     </thead>
 
-                    <tbody className="divide-y divide-white/10">
-                      {docsLoading ? (
+                    <tbody className="divide-y divide-transparent">
+                      {usersLoading ? (
                         <tr>
-                          <td className="px-4 py-4 text-white/70" colSpan={4}>
-                            Loading documents...
+                          <td className="px-6 py-10 text-[13px] font-medium text-white/20 italic text-center" colSpan={4}>
+                            Scanning personnel database...
                           </td>
                         </tr>
-                      ) : filteredDocs.length === 0 ? (
+                      ) : filteredUsers.length === 0 ? (
                         <tr>
-                          <td className="px-4 py-4 text-white/70" colSpan={4}>
-                            No documents found.
+                          <td className="px-6 py-10 text-[13px] font-medium text-white/20 italic text-center" colSpan={4}>
+                            No matching identities detected.
                           </td>
                         </tr>
                       ) : (
-                        filteredDocs.map((d) => (
-                          <tr key={d.id} className="text-white/85 align-top">
-                            <td className="px-4 py-3 font-medium">
-                              <div>{d.title || "-"}</div>
-                              {d.description ? (
-                                <div className="text-xs text-white/50 mt-1 leading-5">
-                                  {d.description}
-                                </div>
-                              ) : null}
-                              {d.status === "approved" && d.approvedByEmail && (
-                                <div className="mt-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-200">
-                                  <div><strong className="font-semibold text-emerald-300">Approved By:</strong> {d.approvedByEmail}</div>
-                                  {d.approvedAt && <div><strong className="font-semibold text-emerald-300">Date:</strong> {formatDate(d.approvedAt)}</div>}
-                                </div>
-                              )}
-                              {d.status === "rejected" && d.rejectedByEmail && (
-                                <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-200">
-                                  <div><strong className="font-semibold text-red-300">Rejected By:</strong> {d.rejectedByEmail}</div>
-                                  {d.rejectedAt && <div><strong className="font-semibold text-red-300">Date:</strong> {formatDate(d.rejectedAt)}</div>}
-                                  {d.rejectionReason && <div className="mt-1"><strong className="font-semibold text-red-300">Reason:</strong> {d.rejectionReason}</div>}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-4 py-3">{d.ownerName || "-"}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs ring-1 ${
-                                  d.status === "approved"
-                                    ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/20"
-                                    : d.status === "rejected"
-                                    ? "bg-red-500/15 text-red-200 ring-red-500/20"
-                                    : "bg-amber-500/15 text-amber-200 ring-amber-500/20"
-                                }`}
-                              >
-                                {d.status === "pending"
-                                  ? "Pending Review"
-                                  : (d.status || "pending").charAt(0).toUpperCase() +
-                                    (d.status || "pending").slice(1)}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex justify-end gap-2 flex-wrap">
-                                <button
-                                  onClick={() => requestDocumentStatusChange(d, "approved")}
-                                  disabled={docBusy || d.status === "approved"}
-                                  className="rounded-xl bg-emerald-500/15 ring-1 ring-emerald-500/25 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
-                                >
-                                  Approve
-                                </button>
+                        filteredUsers.map((u) => {
+                          const isSelf = u.id === user.uid;
+                          const isActive = (u.status || "active") === "active";
+                          const isAdmin = u.role === "admin";
 
-                                <button
-                                  onClick={() => requestDocumentStatusChange(d, "rejected")}
-                                  disabled={docBusy || d.status === "rejected"}
-                                  className="rounded-xl bg-red-500/15 ring-1 ring-red-500/25 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-40"
-                                >
-                                  Reject
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
+                          return (
+                            <tr key={u.id} className="group hover:bg-white/[0.02] transition-colors">
+                              <td className="px-6 py-4 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                                <div className="text-[13px] font-black text-white">{u.name || "Unnamed Personnel"}</div>
+                                <div className="text-[10px] font-black text-white/20 mt-1 lowercase tracking-wider">{u.email}</div>
+                              </td>
+                              <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                                <span className={cx(
+                                  "text-[9px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md ring-1",
+                                  isAdmin ? "bg-indigo-500/10 text-indigo-400 ring-indigo-500/20" : "bg-white/5 text-white/40 ring-white/10"
+                                )}>
+                                  {u.role || "staff"}
+                                </span>
+                              </td>
+                              <td className="px-4 py-4 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                                <span className={cx(
+                                  "text-[9px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-md ring-1",
+                                  isActive ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" : "bg-red-500/10 text-red-400 ring-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.1)]"
+                                )}>
+                                  {u.status || "active"}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-right bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors">
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    disabled={isSelf}
+                                    onClick={() => handleUserRoleChange(u, isAdmin ? "staff" : "admin")}
+                                    className="px-4 py-2 rounded-xl bg-white/5 ring-1 ring-white/10 text-[9px] font-black uppercase tracking-widest text-white/40 hover:bg-white/10 hover:text-white transition-all disabled:opacity-20"
+                                  >
+                                    {isAdmin ? "Downgrade" : "Elevate"}
+                                  </button>
+                                  <button
+                                    disabled={isSelf}
+                                    onClick={() => handleUserStatusChange(u, isActive ? "disabled" : "active")}
+                                    className={cx(
+                                      "px-4 py-2 rounded-xl ring-1 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-20",
+                                      isActive ? "bg-amber-500/5 text-amber-400 ring-amber-500/20 hover:bg-amber-500/10" : "bg-emerald-500/5 text-emerald-400 ring-emerald-500/20 hover:bg-emerald-500/10"
+                                    )}
+                                  >
+                                    {isActive ? "Suspend" : "Restore"}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
                 </div>
               </div>
             </div>
-          </>
+          </div>
+        )}
+
+        {activeTab === "approvals" && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid gap-10 lg:grid-cols-12 mb-10">
+              <div className="lg:col-span-12">
+                <div className="rounded-[2.5rem] bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-10">
+                  <div className="flex-1 w-full">
+                    <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/40 mb-4">Document Verification</div>
+                    <div className="max-w-md">
+                      <Input
+                        value={docSearch}
+                        onChange={(e) => setDocSearch(e.target.value)}
+                        placeholder="Search classification registry..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-6 flex-wrap">
+                    <MetricCard label="Total Submissions" value={docsList.length} color="indigo" />
+                    <MetricCard label="Pending Review" value={docsList.filter((d) => d.status === "pending").length} color="amber" alert={docsList.filter((d) => d.status === "pending").length > 0} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[2.5rem] bg-white/[0.03] ring-1 ring-white/10 p-8 sm:p-10 border border-white/5 shadow-2xl min-w-0">
+              <SectionTitle
+                eyebrow="Verification Queue"
+                title="Security Clearance Workflow"
+                pill={`${filteredDocs.length} Entries`}
+              />
+
+              {docMsg && (
+                <div className="mt-8 rounded-2xl bg-white/5 ring-1 ring-white/10 px-6 py-4 text-xs font-bold text-white/50 italic animate-pulse">
+                  {docMsg}
+                </div>
+              )}
+
+              <div className="overflow-x-auto mt-8 -mx-2 px-2">
+                <table className="w-full text-left border-separate border-spacing-y-2">
+                  <thead>
+                    <tr className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+                      <th className="px-6 py-4">Submission Classification</th>
+                      <th className="px-4 py-4 text-center">Owner Identity</th>
+                      <th className="px-4 py-4 text-center">Protocol Status</th>
+                      <th className="px-6 py-4 text-right">Oversight</th>
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-transparent">
+                    {docsLoading ? (
+                      <tr>
+                        <td className="px-6 py-10 text-[13px] font-medium text-white/20 italic text-center" colSpan={4}>
+                          Scanning verification queue...
+                        </td>
+                      </tr>
+                    ) : filteredDocs.length === 0 ? (
+                      <tr>
+                        <td className="px-6 py-10 text-[13px] font-medium text-white/20 italic text-center" colSpan={4}>
+                          No entries awaiting verification.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredDocs.map((d) => {
+                        const isPending = d.status === "pending";
+                        const isApproved = d.status === "approved";
+                        const isRejected = d.status === "rejected";
+
+                        return (
+                          <tr key={d.id} className="group hover:bg-white/[0.02] transition-colors">
+                            <td className="px-6 py-6 bg-white/[0.02] rounded-l-2xl group-hover:bg-white/[0.04] transition-colors">
+                              <div className="text-[13px] font-black text-white">{d.title || "Untitled Submission"}</div>
+                              {d.description && <div className="text-[11px] font-medium text-white/30 mt-2 leading-relaxed max-w-md">{d.description}</div>}
+                              
+                              {(isApproved || isRejected) && (
+                                <div className={cx(
+                                  "mt-4 p-4 rounded-2xl ring-1 text-[10px] font-black uppercase tracking-widest",
+                                  isApproved ? "bg-emerald-500/[0.03] ring-emerald-500/10 text-emerald-400/60" : "bg-red-500/[0.03] ring-red-500/10 text-red-400/60"
+                                )}>
+                                  <div className="flex items-center justify-between gap-4">
+                                    <span>{isApproved ? "Cleared by" : "Rejected by"}: {isApproved ? d.approvedByEmail : d.rejectedByEmail}</span>
+                                    <span>{formatDate(isApproved ? d.approvedAt : d.rejectedAt)}</span>
+                                  </div>
+                                  {isRejected && d.rejectionReason && <div className="mt-2 pt-2 border-t border-red-500/10 text-red-400/40 italic">Rsn: {d.rejectionReason}</div>}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-6 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <div className="text-[11px] font-black text-white/40 uppercase tracking-widest">{d.ownerName || "Personnel"}</div>
+                            </td>
+                            <td className="px-4 py-6 text-center bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors">
+                              <span className={cx(
+                                "text-[8px] font-black uppercase tracking-[0.2em] px-2 py-1 rounded-md ring-1",
+                                isPending ? "bg-amber-500/10 text-amber-400 ring-amber-500/20" :
+                                isApproved ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" :
+                                "bg-red-500/10 text-red-400 ring-red-500/20"
+                              )}>
+                                {d.status || "Unknown"}
+                              </span>
+                            </td>
+                            <td className="px-6 py-6 text-right bg-white/[0.02] rounded-r-2xl group-hover:bg-white/[0.04] transition-colors">
+                              {isPending ? (
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    onClick={() => requestDocumentStatusChange(d, "approved")}
+                                    disabled={docBusy}
+                                    className="px-4 py-2 rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 text-[9px] font-black uppercase tracking-widest text-emerald-400 hover:bg-emerald-500 hover:text-white transition-all shadow-lg shadow-emerald-500/10 disabled:opacity-20"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={() => requestDocumentStatusChange(d, "rejected")}
+                                    disabled={docBusy}
+                                    className="px-4 py-2 rounded-xl bg-red-500/10 ring-1 ring-red-500/20 text-[9px] font-black uppercase tracking-widest text-red-400 hover:bg-red-500 hover:text-white transition-all disabled:opacity-20"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="text-[9px] font-black uppercase tracking-widest text-white/10 italic">Archived</div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </PageShell>
